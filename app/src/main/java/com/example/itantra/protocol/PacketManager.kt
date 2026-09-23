@@ -151,7 +151,7 @@ class PacketManager {
         val headerData = ByteArray(16)
         System.arraycopy(longToBytes(packet.messageId), 0, headerData, 0, 8)
         System.arraycopy(intToBytes(packet.sequenceId), 0, headerData, 8, 4)
-        headerData[12] = packet.language.code.toByteArray()[0]
+        headerData[12] = Language.toByte(packet.language)
         headerData[13] = packet.packetType.id
         headerData[14] = packet.priority
         headerData[15] = packet.flags

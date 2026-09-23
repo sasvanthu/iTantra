@@ -7,8 +7,24 @@ enum class Language(val code: String, val displayName: String) {
     UNKNOWN("xx", "Unknown");
 
     companion object {
+        private val codeMap = entries.associateBy { it.code }
+
         fun fromCode(code: String): Language =
-            entries.find { it.code == code } ?: UNKNOWN
+            codeMap[code] ?: UNKNOWN
+
+        fun fromByte(b: Byte): Language = when (b) {
+            0x01.toByte() -> ENGLISH
+            0x02.toByte() -> HINDI
+            0x03.toByte() -> TAMIL
+            else -> UNKNOWN
+        }
+
+        fun toByte(lang: Language): Byte = when (lang) {
+            ENGLISH -> 0x01
+            HINDI -> 0x02
+            TAMIL -> 0x03
+            UNKNOWN -> 0x00
+        }
     }
 }
 

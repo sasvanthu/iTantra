@@ -16,6 +16,7 @@ class TokenDictionary {
 
     private val tokenToId = mutableMapOf<String, Int>()
     private val idToToken = mutableMapOf<Int, String>()
+    private val idToImportance = mutableMapOf<Int, Importance>()
     private var nextId = 0
     private val entries = mutableListOf<DictionaryEntry>()
 
@@ -42,7 +43,7 @@ class TokenDictionary {
             "MY", "YOUR", "HIS", "HER", "OUR", "THEIR",
             "NOT", "NO", "YES", "AND", "OR", "BUT",
             "IN", "ON", "AT", "TO", "FOR", "WITH", "FROM",
-            "NEED", "WANT", "GO", "COME", "HELP", "FIND",
+            "NEED", "WANT", "GO", "COME", "FIND",
             "WHERE", "WHAT", "WHEN", "WHO", "HOW", "WHY",
             "HERE", "THERE", "NOW", "THEN", "ALWAYS", "NEVER",
             "GOOD", "BAD", "BIG", "SMALL", "FAST", "SLOW",
@@ -82,6 +83,7 @@ class TokenDictionary {
         val upper = token.uppercase()
         tokenToId[upper] = id
         idToToken[id] = upper
+        idToImportance[id] = importance
         entries.add(DictionaryEntry(upper, id, 0, Language.UNKNOWN))
     }
 
@@ -94,8 +96,7 @@ class TokenDictionary {
 
     fun getImportance(token: String): Importance {
         val id = encode(token)
-        return if (id >= 0 && id < 30) Importance.CRITICAL
-        else Importance.NORMAL
+        return idToImportance[id] ?: Importance.NORMAL
     }
 
     fun getTokenCount(): Int = tokenToId.size

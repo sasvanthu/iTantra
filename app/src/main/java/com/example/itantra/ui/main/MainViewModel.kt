@@ -188,6 +188,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         super.onCleared()
         speechPipeline?.shutdown()
-        wifiTransport.disconnect()
+        viewModelScope.launch {
+            wifiTransport.disconnect()
+        }
     }
 }

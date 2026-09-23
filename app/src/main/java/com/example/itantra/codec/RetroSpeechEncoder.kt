@@ -142,7 +142,7 @@ class RetroSpeechEncoder {
         dos.writeByte(1)    // version
         dos.writeLong(representation.messageId)
         dos.writeInt(representation.sequenceId)
-        dos.writeByte(representation.language.code.toByteArray()[0].toInt())
+        dos.writeByte(Language.toByte(representation.language).toInt())
 
         // Token count
         dos.writeInt(representation.tokens.size)

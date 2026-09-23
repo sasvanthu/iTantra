@@ -31,7 +31,7 @@ class RetroSpeechDecoder {
             val messageId = dis.readLong()
             val sequenceId = dis.readInt()
             val langByte = dis.readByte()
-            val language = Language.fromCode(String(byteArrayOf(langByte)))
+            val language = Language.fromByte(langByte)
 
             // Read tokens
             val tokenCount = dis.readInt()

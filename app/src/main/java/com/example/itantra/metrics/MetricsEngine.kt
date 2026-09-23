@@ -1,6 +1,5 @@
 package com.example.itantra.metrics
 
-import android.os.Debug
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicLong
 
@@ -124,16 +123,14 @@ class MetricsEngine {
 
     fun getSystemMetrics(): SystemMetrics {
         val runtime = Runtime.getRuntime()
-        val usedMemory = (runtime.totalMemory() - runtime.freeMemory()) / (1024 * 1024).toFloat()
-        val maxMemory = runtime.maxMemory() / (1024 * 1024).toFloat()
-        val heapUsed = Debug.getHeapAllocatedSize() / (1024 * 1024).toFloat()
-        val heapMax = Debug.getHeapSize() / (1024 * 1024).toFloat()
+        val usedMemory = (runtime.totalMemory() - runtime.freeMemory()).toFloat() / (1024f * 1024f)
+        val maxMemory = runtime.maxMemory().toFloat() / (1024f * 1024f)
 
         return SystemMetrics(
-            cpuUsage = 0f, // Would need native code for accurate CPU measurement
+            cpuUsage = 0f,
             memoryUsageMB = usedMemory,
-            heapUsedMB = heapUsed,
-            heapMaxMB = heapMax
+            heapUsedMB = usedMemory,
+            heapMaxMB = maxMemory
         )
     }
 
@@ -151,7 +148,7 @@ class MetricsEngine {
 
     fun getAverageLatency(): LatencyMetrics {
         val count = measurementCount.get()
-        if (count == 0) return LatencyMetrics()
+        if (count == 0L) return LatencyMetrics()
         return LatencyMetrics(
             sttLatencyMs = totalSttLatency.get() / count,
             encodingLatencyMs = totalEncodingLatency.get() / count,

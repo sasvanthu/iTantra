@@ -28,7 +28,7 @@ data class Packet(
         dos.writeByte(version.toInt())
         dos.writeLong(messageId)
         dos.writeInt(sequenceId)
-        dos.writeByte(language.code.toByteArray()[0].toInt())
+        dos.writeByte(Language.toByte(language).toInt())
         dos.writeByte(packetType.id.toInt())
         dos.writeByte(priority.toInt())
         dos.writeByte(flags.toInt())
@@ -56,7 +56,7 @@ data class Packet(
                 val messageId = dis.readLong()
                 val sequenceId = dis.readInt()
                 val langByte = dis.readByte()
-                val language = Language.fromCode(String(byteArrayOf(langByte)))
+                val language = Language.fromByte(langByte)
                 val packetType = PacketType.fromId(dis.readByte())
                 val priority = dis.readByte()
                 val flags = dis.readByte()
@@ -108,7 +108,7 @@ data class Packet(
             val headerData = ByteArray(16)
             System.arraycopy(longToBytes(messageId), 0, headerData, 0, 8)
             System.arraycopy(intToBytes(sequenceId), 0, headerData, 8, 4)
-            headerData[12] = language.code.toByteArray()[0]
+            headerData[12] = Language.toByte(language)
             headerData[13] = PacketType.TEXT_DATA.id
             headerData[14] = priority
             headerData[15] = 0
