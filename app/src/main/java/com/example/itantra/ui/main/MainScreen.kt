@@ -23,6 +23,7 @@ fun MainScreen(viewModel: MainViewModel) {
                 1 -> MetricsScreen(viewModel)
                 2 -> CodecLabScreen(viewModel)
                 3 -> SettingsScreen(viewModel)
+                4 -> HardwareTestScreen()
                 else -> CommunicationScreen(viewModel)
             }
         }

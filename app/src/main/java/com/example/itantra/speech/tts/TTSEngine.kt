@@ -7,6 +7,22 @@ import android.util.Log
 import com.example.itantra.codec.Language
 import java.util.Locale
 
+/**
+ * TTS abstraction (Phase 5 spec #23 — audit outcome):
+ *
+ *  - The emergency pipeline only depends on this interface; swap the backend
+ *    without touching [com.example.itantra.SpeechPipeline].
+ *  - [AndroidTTSEngine] is the ONLY current implementation. Audit verdict:
+ *    Android text-to-speech is a DEVICE-PROVIDED, PROPRIETARY engine (usually
+ *    Google's TTS on Android/Google, or the OEM's, e.g. Samsung/MiUI). It is
+ *    offline-capable once voices are downloaded, but it is NOT open-source and
+ *    its voice data is not redistributable — it violates this project's
+ *    open-source-only constraint for the final device.
+ *  - So Android TTS stays ONLY as a DEVELOPMENT FALLBACK (on-device staging of
+ *    the receive path). Enable a truly open-source offline engine (e.g.
+ *    eSpeak-NG, Piper, RHVoice) behind this interface for the delivered device.
+ *  - See TTS_AUDIT.md in the repo root for the full decision.
+ */
 interface TTSEngine {
     fun initialize(context: Context, language: Language, onReady: () -> Unit = {})
     fun speak(text: String, utteranceId: String = System.currentTimeMillis().toString())
@@ -15,6 +31,12 @@ interface TTSEngine {
     fun shutdown()
 }
 
+/**
+ * DEVELOPMENT FALLBACK ONLY (see file-level audit notes): bundles the device
+ * vendor's proprietary TTS stack, not the open-source path the final build
+ * requires. All current usage goes through [TTSEngine] so a Piper/RHVoice/
+ * eSpeak-NG engine can drop in later.
+ */
 class AndroidTTSEngine : TTSEngine {
 
     companion object {

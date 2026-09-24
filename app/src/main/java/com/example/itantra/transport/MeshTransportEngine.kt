@@ -102,6 +102,14 @@ class MeshTransportEngine(
     private val _incomingPayloads = MutableSharedFlow<ReassembledPayload>(extraBufferCapacity = 64)
     override val incomingPayloads: SharedFlow<ReassembledPayload> = _incomingPayloads.asSharedFlow()
 
+    private val _relayStats = MutableStateFlow(MeshRelayStats())
+    /** Per-node relay counters surfaced on the Hardware Test relay panel. */
+    val relayStats: StateFlow<MeshRelayStats> = _relayStats.asStateFlow()
+
+    fun clearRelayStats() {
+        _relayStats.value = MeshRelayStats()
+    }
+
     private val messageIdCounter = AtomicLong(1)
     private var sessionEpoch = 0
     private var lastDupSeen = 0
@@ -333,6 +341,7 @@ class MeshTransportEngine(
         val routing = router.receive(hop)
         if (routing is MeshRouting.Drop) {
             link { duplicatePackets++ }
+            _relayStats.update { it.copy(duplicatesDropped = it.duplicatesDropped + 1) }
             return
         }
 
@@ -378,7 +387,17 @@ class MeshTransportEngine(
 
         if (routing is MeshRouting.Accept && routing.forwardTtl > 0) {
             val relayed = hop.copy(ttl = routing.forwardTtl, hops = hop.hops + 1)
+            val forwardCount = edges.count { it !== fromEdge && it.isConnected() }
+            _relayStats.update {
+                it.copy(
+                    packetsRelayed = it.packetsRelayed + 1,
+                    lastHop = "${fromEdge.getLinkName()} → $forwardCount more edge(s)"
+                )
+            }
             flood(relayed.serialize(), except = fromEdge)
+        } else if (routing is MeshRouting.Accept) {
+            // Delivered, but this hop consumed the last TTL: no relay onward.
+            _relayStats.update { it.copy(ttlExpired = it.ttlExpired + 1) }
         }
     }
 

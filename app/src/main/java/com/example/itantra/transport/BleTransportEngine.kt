@@ -31,6 +31,9 @@ import com.example.itantra.protocol.BleChunkResult
 import com.example.itantra.protocol.BleChunkWriter
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -128,6 +131,40 @@ class BleTransportEngine(
     private val writeAwait = AtomicReference<CompletableDeferred<Int>?>(null)
     private val writeMutex = Mutex()
 
+    // ------------------------------------------------------------------
+    // Hardware-test instrumentation (additive; no behavior change)
+    // ------------------------------------------------------------------
+
+    private val _bleCheck = MutableStateFlow(BleLinkCheck())
+    /** Granular BLE milestone checklist for the Hardware Test screen. */
+    val bleCheck: StateFlow<BleLinkCheck> = _bleCheck.asStateFlow()
+
+    private fun mark(check: BleLinkCheck = _bleCheck.value, block: BleLinkCheck.() -> BleLinkCheck) {
+        _bleCheck.value = check.block()
+    }
+
+    /** Cumulative ATT atoms actually written (callbacks/frames), for fragment accounting. */
+    @Volatile private var chunksSentTotal = 0L
+
+    fun chunksSent(): Long = chunksSentTotal
+
+    /** Current negotiated ATT MTU (23 until [onMtuChanged]). */
+    fun negotiatedMtu(): Int = mtuBytes
+
+    /**
+     * Hardware-test hook: when > 0, every Nth inbound ATT atom arriving over
+     * the link is deliberately dropped. The chunk sequence gap this creates is
+     * detected by [BleChunkReader] and surfaces as packet loss + frame-level
+     * recovery, exactly like a real notification overrun. MUST be labeled
+     * "SIMULATED LOSS" wherever it is reported.
+     */
+    @Volatile var chunkDropEveryNth: Int = 0
+
+    private var incomingChunkCounter = 0L
+    @Volatile private var simulatedChunksDroppedTotal = 0L
+
+    fun simulatedChunksDropped(): Long = simulatedChunksDroppedTotal
+
     private fun negotiatedChunkPayload(): Int = maxOf(20, mtuBytes - 3)
 
     /** Reset chunk state for a fresh session; MTU is re-negotiated per link. */
@@ -138,6 +175,7 @@ class BleTransportEngine(
             chunkReader.reset()
         }
         mtuBytes = DEFAULT_ATT_MTU
+        _bleCheck.value = BleLinkCheck()
     }
 
     private fun hasPermission(permission: String): Boolean =
@@ -194,6 +232,7 @@ class BleTransportEngine(
         service.addCharacteristic(txCharacteristic)
         try {
             server.addService(service)
+            mark { copy(serviceReady = true, characteristicsReady = true) }
         } catch (e: SecurityException) {
             connectAwait.set(null)
             closeGattServer()
@@ -222,6 +261,7 @@ class BleTransportEngine(
         try {
             advertiser.startAdvertising(settings, data, advertiseCallback)
             advertising = true
+            mark { copy(advertising = true) }
         } catch (e: Exception) {
             advertising = false
         }
@@ -296,6 +336,7 @@ class BleTransportEngine(
         try {
             scanner.startScan(listOf(filter), settings, scanCallback)
             scanning = true
+            mark { copy(scanning = true) }
         } catch (e: SecurityException) {
             scanning = false
         }
@@ -334,6 +375,7 @@ class BleTransportEngine(
                 char.value = chunk
                 @Suppress("DEPRECATION")
                 server.notifyCharacteristicChanged(device, char, false)
+                chunksSentTotal++
             }
         } catch (e: SecurityException) {
             // link tearing down; write loop exits next iteration
@@ -352,6 +394,7 @@ class BleTransportEngine(
                     baseScope.launch { finishSession("BLE write failed (status $status)") }
                     return
                 }
+                chunksSentTotal++
             }
         }
     }
@@ -474,6 +517,16 @@ class BleTransportEngine(
 
     private fun handleIncomingChunk(chunk: ByteArray) {
         if (!isSessionActive()) return
+        val everyNth = chunkDropEveryNth
+        if (everyNth > 0) {
+            incomingChunkCounter++
+            if (incomingChunkCounter % everyNth.toLong() == 0L) {
+                // SIMULATED LOSS: drop one ATT atom on purpose. The seq gap this
+                // leaves is reported by the reader exactly like a real overrun.
+                simulatedChunksDroppedTotal++
+                return
+            }
+        }
         val stream: ByteArray? = synchronized(chunkLock) {
             when (val r = chunkReader.feed(chunk)) {
                 is BleChunkResult.Gap -> {
@@ -521,7 +574,9 @@ class BleTransportEngine(
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 if (advertising) stopAdvertising()
                 connectedDevice = device
+                mark { copy(connected = true) }
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                mark { copy(connected = false) }
                 if (connectedDevice == device) {
                     connectedDevice = null
                     connectAwait.get()?.complete(false)
@@ -575,6 +630,7 @@ class BleTransportEngine(
                 }
             }
             // Central subscribed to TX notifications -> ready to receive frames.
+            mark { copy(notificationsEnabled = true) }
             connectAwait.get()?.let { hostReady ->
                 if (!hostReady.isCompleted && connectedDevice != null) hostReady.complete(true)
             }
@@ -582,6 +638,7 @@ class BleTransportEngine(
 
         override fun onMtuChanged(device: BluetoothDevice, mtu: Int) {
             updateMtu(mtu)
+            mark { copy(mtuNegotiated = true, mtu = mtuBytes) }
         }
 
         override fun onNotificationSent(device: BluetoothDevice?, status: Int) {
@@ -602,6 +659,7 @@ class BleTransportEngine(
                 return
             }
             if (newState == BluetoothProfile.STATE_CONNECTED) {
+                mark { copy(connected = true) }
                 try {
                     gatt.requestMtu(requestMtuOverride)
                     gatt.discoverServices()
@@ -609,6 +667,7 @@ class BleTransportEngine(
                     connectAwait.get()?.complete(false)
                 }
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                mark { copy(connected = false) }
                 connectAwait.get()?.complete(false)
                 writeAwait.get()?.complete(BluetoothGatt.GATT_FAILURE)
                 if (isSessionActive()) {
@@ -634,6 +693,7 @@ class BleTransportEngine(
             }
             rxCharacteristic = rx
             txCharacteristic = tx
+            mark { copy(serviceReady = true, characteristicsReady = true) }
             try {
                 gatt.setCharacteristicNotification(tx, true)
                 val cccd = tx.getDescriptor(CCCD_UUID)
@@ -653,6 +713,9 @@ class BleTransportEngine(
 
         override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
             if (descriptor.uuid == CCCD_UUID) {
+                mark {
+                    copy(notificationsEnabled = status == BluetoothGatt.GATT_SUCCESS)
+                }
                 connectAwait.get()?.let { ready ->
                     ready.complete(status == BluetoothGatt.GATT_SUCCESS)
                 }
@@ -661,6 +724,7 @@ class BleTransportEngine(
 
         override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
             updateMtu(if (status == BluetoothGatt.GATT_SUCCESS) mtu else DEFAULT_ATT_MTU)
+            mark { copy(mtuNegotiated = true, mtu = mtuBytes) }
         }
 
         override fun onCharacteristicChanged(

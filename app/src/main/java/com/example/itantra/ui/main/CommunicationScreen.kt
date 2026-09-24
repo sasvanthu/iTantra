@@ -694,6 +694,7 @@ fun BottomTabs(activeTab: Int, onTabSelected: (Int) -> Unit, modifier: Modifier 
         TabItem("METRICS", Icons.Default.Analytics, activeTab == 1) { onTabSelected(1) }
         TabItem("CODEC", Icons.Default.Science, activeTab == 2) { onTabSelected(2) }
         TabItem("CONFIG", Icons.Default.Settings, activeTab == 3) { onTabSelected(3) }
+        TabItem("HW TEST", Icons.Default.PhoneAndroid, activeTab == 4) { onTabSelected(4) }
     }
 }
 

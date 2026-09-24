@@ -118,6 +118,37 @@ sealed class LinkMessageEvent {
     ) : LinkMessageEvent()
 }
 
+/**
+ * Last-known BLE link milestones, surfaced for the hardware-test checklist.
+ * Updated at the GATT events listed; purely additive instrumentation with no
+ * behavior change. `ready` mirrors the READY gate used before the capability
+ * handshake can complete.
+ */
+data class BleLinkCheck(
+    val advertising: Boolean = false,
+    val scanning: Boolean = false,
+    val connected: Boolean = false,
+    val serviceReady: Boolean = false,
+    val characteristicsReady: Boolean = false,
+    val notificationsEnabled: Boolean = false,
+    val mtuNegotiated: Boolean = false,
+    val mtu: Int = BleTransportEngine.DEFAULT_ATT_MTU
+) {
+    val ready: Boolean
+        get() = connected && serviceReady && characteristicsReady && notificationsEnabled && mtuNegotiated
+}
+
+/**
+ * Live per-node relay counters for a [MeshTransportEngine] (the "MESH RELAY"
+ * panel). Cumulative for the engine lifetime; reset with [MeshTransportEngine.clearRelayStats].
+ */
+data class MeshRelayStats(
+    var packetsRelayed: Long = 0,
+    var duplicatesDropped: Long = 0,
+    var ttlExpired: Long = 0,
+    var lastHop: String = ""
+)
+
 /** Outcome of [TransportEngine.send], measuring actual bytes/latency. */
 data class SendResult(
     val messageId: Long,

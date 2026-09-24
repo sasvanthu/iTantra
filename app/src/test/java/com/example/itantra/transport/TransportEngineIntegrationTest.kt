@@ -228,6 +228,7 @@ class TransportEngineIntegrationTest {
         assertNotNull(result)
         assertTrue(result!!.failed)
         assertTrue(result.retransmissions > 0)
+        withTimeout(3_000) { while (pair.device.linkMetrics.value.corruptedFrames == 0) delay(10) }
         assertTrue(pair.device.linkMetrics.value.corruptedFrames > 0)
     }
 
