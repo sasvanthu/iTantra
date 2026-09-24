@@ -1,10 +1,17 @@
 package com.example.itantra.codec
 
-enum class Language(val code: String, val displayName: String) {
-    ENGLISH("en", "English"),
-    HINDI("hi", "Hindi"),
-    TAMIL("ta", "Tamil"),
-    UNKNOWN("xx", "Unknown");
+enum class Language(val code: String, val displayName: String, val wireByte: Byte) {
+    ENGLISH("en", "English", 0x01),
+    HINDI("hi", "Hindi", 0x02),
+    TAMIL("ta", "Tamil", 0x03),
+    BENGALI("bn", "Bengali", 0x04),
+    TELUGU("te", "Telugu", 0x05),
+    MARATHI("mr", "Marathi", 0x06),
+    GUJARATI("gu", "Gujarati", 0x07),
+    KANNADA("kn", "Kannada", 0x08),
+    MALAYALAM("ml", "Malayalam", 0x09),
+    ODIA("or", "Odia", 0x0A),
+    UNKNOWN("xx", "Unknown", 0x00);
 
     companion object {
         private val codeMap = entries.associateBy { it.code }
@@ -12,19 +19,12 @@ enum class Language(val code: String, val displayName: String) {
         fun fromCode(code: String): Language =
             codeMap[code] ?: UNKNOWN
 
-        fun fromByte(b: Byte): Language = when (b) {
-            0x01.toByte() -> ENGLISH
-            0x02.toByte() -> HINDI
-            0x03.toByte() -> TAMIL
-            else -> UNKNOWN
-        }
+        /** Wire bytes are append-only: existing builds on the air keep their
+         * codes while newer ten-language builds add 0x04..0x0A. */
+        fun fromByte(b: Byte): Language =
+            entries.find { it.wireByte == b } ?: UNKNOWN
 
-        fun toByte(lang: Language): Byte = when (lang) {
-            ENGLISH -> 0x01
-            HINDI -> 0x02
-            TAMIL -> 0x03
-            UNKNOWN -> 0x00
-        }
+        fun toByte(lang: Language): Byte = lang.wireByte
     }
 }
 
@@ -56,6 +56,9 @@ enum class PacketType(val id: Byte) {
     companion object {
         fun fromId(id: Byte): PacketType =
             entries.find { it.id == id } ?: TEXT_DATA
+
+        /** Strict lookup used by the wire decoder to reject unknown types. */
+        fun fromIdOrNull(id: Byte): PacketType? = entries.find { it.id == id }
     }
 }
 

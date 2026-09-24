@@ -40,8 +40,15 @@ data class Packet(
     }
 
     companion object {
+        /** Bytes before the payload: magic(4)+version(1)+messageId(8)+sequenceId(4)+language(1)+packetType(1)+priority(1)+flags(1)+payloadLength(4). */
+        private const val HEADER_BYTES = 25
+        /** CRC trailer size (4 bytes). */
+        private const val CRC_BYTES = 4
+        /** Maximum accepted payload a wire packet may claim: 64 KiB protocol frame cap. */
+        internal const val MAX_WIRE_PAYLOAD = 65536
+
         fun deserialize(data: ByteArray): Packet? {
-            return try {
+            val packet = try {
                 val bais = ByteArrayInputStream(data)
                 val dis = DataInputStream(bais)
 
@@ -53,19 +60,30 @@ data class Packet(
                 }
 
                 val version = dis.readByte()
+                if (version != 1.toByte()) return null
+
                 val messageId = dis.readLong()
                 val sequenceId = dis.readInt()
                 val langByte = dis.readByte()
                 val language = Language.fromByte(langByte)
-                val packetType = PacketType.fromId(dis.readByte())
+                val packetType = PacketType.fromIdOrNull(dis.readByte()) ?: return null
                 val priority = dis.readByte()
                 val flags = dis.readByte()
                 val payloadLength = dis.readInt()
+
+                // Bounds-check the claimed payload BEFORE allocating: a hostile
+                // frame must never trigger a huge allocation (OOM is an Error,
+                // which the outer catch would not have contained) or skip the
+                // CRC trailer.
+                if (payloadLength < 0) return null
+                if (payloadLength > MAX_WIRE_PAYLOAD) return null
+                if (HEADER_BYTES + payloadLength + CRC_BYTES > data.size) return null
+
                 val payload = ByteArray(payloadLength)
                 dis.readFully(payload)
                 val crc = dis.readInt()
 
-                Packet(
+                val result = Packet(
                     magic = magic,
                     version = version,
                     messageId = messageId,
@@ -78,9 +96,30 @@ data class Packet(
                     payload = payload,
                     crc = crc
                 )
+                if (!verifyCrc(result)) return null
+                result
             } catch (e: Exception) {
-                null
+                return null
             }
+            return packet
+        }
+
+        /**
+         * Packet-level integrity: recomputes the CRC exactly like the creators
+         * (over the 16-byte identity header + payload). Control packets are
+         * created with crc = 0 and, lacking integrity coverage, are accepted
+         * verbatim — data packets with a non-zero stored CRC must match.
+         */
+        private fun verifyCrc(packet: Packet): Boolean {
+            if (packet.crc == 0) return true
+            val headerData = ByteArray(16)
+            System.arraycopy(longToBytes(packet.messageId), 0, headerData, 0, 8)
+            System.arraycopy(intToBytes(packet.sequenceId), 0, headerData, 8, 4)
+            headerData[12] = Language.toByte(packet.language)
+            headerData[13] = packet.packetType.id
+            headerData[14] = packet.priority
+            headerData[15] = 0 // creators always stamp flags = 0 into the CRC
+            return computeCRC(headerData + packet.payload) == packet.crc
         }
 
         fun computeCRC(data: ByteArray): Int {
@@ -204,17 +243,18 @@ data class Packet(
             )
         }
 
-        fun createStartPacket(messageId: Long, language: Language): Packet {
+        fun createStartPacket(messageId: Long, language: Language, priority: Byte = 2): Packet {
             return Packet(
                 messageId = messageId,
                 sequenceId = 0,
                 language = language,
                 packetType = PacketType.START,
+                priority = priority,
                 payload = byteArrayOf()
             )
         }
 
-        fun createEndPacket(messageId: Long, language: Language, dataCount: Int): Packet {
+        fun createEndPacket(messageId: Long, language: Language, dataCount: Int, priority: Byte = 2): Packet {
             // The END payload carries the total number of DATA packets, so the
             // receiver can detect a lost tail even when the last DATA is dropped.
             val payload = byteArrayOf(
@@ -228,6 +268,7 @@ data class Packet(
                 sequenceId = -1,
                 language = language,
                 packetType = PacketType.END,
+                priority = priority,
                 payload = payload
             )
         }

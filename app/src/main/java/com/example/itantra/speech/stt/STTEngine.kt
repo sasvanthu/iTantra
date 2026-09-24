@@ -61,6 +61,9 @@ class VoskSTTEngine : STTEngine {
     }
 
     private fun getModelDir(context: Context, language: Language): String? {
+        // Only these three have known offline Vosk bundles. The P21 languages
+        // (bn/te/mr/gu/kn/ml/or) are recognised by the enum but NO model asset
+        // is shipped — initialize() honestly reports the model as missing.
         return when (language) {
             Language.ENGLISH -> "model-en"
             Language.HINDI -> "model-hi"

@@ -28,7 +28,9 @@ data class MeshMessage(
  *  - The END packet's dataCount detects a lost tail: the partial message is
  *    **dropped** and counted, never half-delivered with holes.
  *  - Gaps discovered while accumulating (a DATA arrives with sequence numbers
- *    skipped) are recorded as packet loss — no recovery attempt is made.
+ *    skipped) are recorded as packet loss — but only *unresolved* loss: a gap
+ *    that is later healed by a retransmitted packet nets back out, so reordered
+ *    (not lost) traffic is reported honestly as zero loss.
  *  - Reassembly is honest about its limits: metrics are surfaced through the
  *    counters below, and stale half-messages are purged so a hostile or chatty
  *    mesh cannot grow memory without bound.
@@ -49,6 +51,9 @@ class MeshReassembler(
         var expectedDataCount = -1
         var isEmergency = false
         var gapsReported = false
+
+        /** Number of seq range slots currently missing and not yet healed. */
+        var pendingGaps = 0
     }
 
     private val buffers = mutableMapOf<Long, Buf>()
@@ -78,10 +83,10 @@ class MeshReassembler(
                     return null
                 }
                 if (seq > buf.maxSeq) {
-                    gapsDetected += (seq - buf.maxSeq - 1)
                     buf.maxSeq = seq
                 }
                 buf.parts[seq] = packet.payload
+                reconcileGap(buf)
                 // A flooded network can reorder: the END may arrive while the
                 // last DATA packets are still in flight, so re-check completion
                 // whenever new data lands after we already saw the END.
@@ -128,13 +133,26 @@ class MeshReassembler(
         }
         // Gap: a flooded broadcast can reorder, so the missing packets may
         // still be in flight — never drop a buffer that could still complete.
-        // Report the gap once (honest packet-loss signal) and leave the buffer
-        // for the purge to reclaim if it never fills in.
+        // Report the gap once (honest packet-loss signal until healed) and
+        // leave the buffer for the purge to reclaim if it never fills in.
         if (!buf.gapsReported) {
-            gapsDetected += expected.filter { !buf.parts.containsKey(it) }.size
+            reconcileGap(buf, expected.count { !buf.parts.containsKey(it) })
             buf.gapsReported = true
         }
         return null
+    }
+
+    /**
+     * Keep [gapsDetected] equal to the number of *currently unresolved* gaps:
+     * new holes raise it, stragglers that heal a hole lower it back to zero.
+     */
+    private fun reconcileGap(buf: Buf, missingCount: Int? = null) {
+        val missing = missingCount ?: (1..buf.maxSeq).count { !buf.parts.containsKey(it) }
+        val delta = missing - buf.pendingGaps
+        if (delta != 0) {
+            gapsDetected = (gapsDetected + delta).coerceAtLeast(0)
+            buf.pendingGaps = missing
+        }
     }
 
     /** Drop half-messages that have not completed within [retentionMillis]. */

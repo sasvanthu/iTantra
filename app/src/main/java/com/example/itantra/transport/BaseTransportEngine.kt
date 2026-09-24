@@ -90,11 +90,21 @@ abstract class BaseTransportEngine(
     private val messageIdCounter = AtomicLong(1)
     private val epochCounter = AtomicLong(1)
 
+    /** Priority scheduling + adaptive bandwidth decisions (Phase 12/15). */
+    private val governor = AdaptiveLinkGovernor()
+
+    private val _bandwidthMode =
+        MutableStateFlow(com.example.itantra.data.AdaptiveBandwidth.BandwidthMode.NORMAL)
+
+    /** Current adaptive mode derived from measured link metrics. */
+    val bandwidthMode: StateFlow<com.example.itantra.data.AdaptiveBandwidth.BandwidthMode> =
+        _bandwidthMode.asStateFlow()
+
     private var isHost = false
     private var sessionEpoch = 0
     @Volatile private var lastError: String? = null
 
-    private var outboundFrames = Channel<ByteArray>(Channel.BUFFERED)
+    private var outboundFrames = PriorityFrameQueue()
     private var incomingChunks = Channel<ByteArray>(Channel.BUFFERED)
 
     private var frameReader = FrameReader()
@@ -107,6 +117,14 @@ abstract class BaseTransportEngine(
 
     private val activeSends = ConcurrentHashMap<Long, SendTracker>()
     private val receiveBuffers = ConcurrentHashMap<Long, InProgressMessage>()
+
+    /**
+     * Message ids already delivered this session. Late duplicates of any
+     * completed message (frame-level duplication, retransmission after
+     * delivery) are re-ACKed and dropped so the application sees EXACTLY ONE
+     * delivery per message id.
+     */
+    private val completedMessages = ConcurrentHashMap.newKeySet<Long>()
 
     init {
         retransmissionManager.onMaxRetries = { key ->
@@ -208,8 +226,11 @@ abstract class BaseTransportEngine(
         _linkMetrics.value = LinkMetrics()
         _messageInfo.value = MessageInfo()
 
-        outboundFrames = Channel(Channel.BUFFERED)
+        outboundFrames = PriorityFrameQueue()
         incomingChunks = Channel(Channel.BUFFERED)
+        governor.reset()
+        _bandwidthMode.value = com.example.itantra.data.AdaptiveBandwidth.BandwidthMode.NORMAL
+        completedMessages.clear()
 
         sessionJob = Job()
         sessionJob?.let { job ->
@@ -259,7 +280,8 @@ abstract class BaseTransportEngine(
         sessionJob?.cancel()
         sessionJob = null
 
-        outboundFrames.close()
+        // The priority queue is not cancellable: session cancellation ends the
+        // write loop, and the queue itself is replaced on the next prepareSession.
         incomingChunks.close()
 
         try {
@@ -276,6 +298,7 @@ abstract class BaseTransportEngine(
         }
         activeSends.clear()
         receiveBuffers.clear()
+        completedMessages.clear()
 
         _session.value = null
         _linkMetrics.value = LinkMetrics()
@@ -325,7 +348,7 @@ abstract class BaseTransportEngine(
             messageId = messageId,
             priority = priority.toInt(),
             isEmergency = isEmergency,
-            maxPayload = Packetizer.DEFAULT_MAX_PAYLOAD
+            maxPayload = governor.maxPayload()
         )
 
         val tracker = SendTracker(messageId, packets.size, data.size, isEmergency)
@@ -403,7 +426,14 @@ abstract class BaseTransportEngine(
         return final
     }
 
-    /** Serialize, count and enqueue one packet, preserving strict FIFO order. */
+    /** Wire priority used by the scheduler for each packet class. */
+    private fun framePriority(packet: Packet): Int = when (packet.packetType) {
+        PacketType.ACK, PacketType.NACK, PacketType.RETRANSMIT,
+        PacketType.CAPABILITY, PacketType.CAPABILITY_ACK -> 2
+        else -> packet.priority.toInt().coerceIn(0, 3)
+    }
+
+    /** Serialize, count and enqueue one packet (priority-aware, FIFO per bucket). */
     private suspend fun enqueueFrame(packet: Packet) {
         val frame = FrameWriter.write(sessionEpoch, packet.serialize())
         val size = frame.size
@@ -416,17 +446,13 @@ abstract class BaseTransportEngine(
         } else {
             link { controlPacketsSent++ }
         }
-        try {
-            outboundFrames.send(frame)
-        } catch (e: Exception) {
-            // link closed while queueing
-        }
+        outboundFrames.enqueue(frame, framePriority(packet))
     }
 
     private suspend fun runWriteLoop(session: Job) {
         try {
             while (session.isActive) {
-                val frame = outboundFrames.receiveCatching().getOrNull() ?: break
+                val frame = outboundFrames.take()
                 val frames = networkSimulator.applyOutgoing(frame)
                 for (f in frames) {
                     writeRawFrame(f)
@@ -456,6 +482,9 @@ abstract class BaseTransportEngine(
     private suspend fun runRetransmitLoop(session: Job) {
         while (session.isActive) {
             delay(ackTimeoutMs / 2)
+            governor.observe(_linkMetrics.value)
+            val mode = governor.mode()
+            if (mode != _bandwidthMode.value) _bandwidthMode.value = mode
             val overdue = retransmissionManager.checkTimeouts()
             for (p in overdue) {
                 val tracker = activeSends[p.messageId]
@@ -508,8 +537,15 @@ abstract class BaseTransportEngine(
             return
         }
 
-        // Symmetric reply (each side answers the other's announcement).
-        sendCapability(PacketType.CAPABILITY_ACK)
+        // Reply only to announcements, and only while we are still waiting on
+        // our own handshake. Replying to CAPABILITY_ACK unconditionally would
+        // ping-pong CAPABILITY_ACK forever between the two peers, starving
+        // data frames (a bounded channel used to mask this by throttling).
+        // A pending handshake still lets a lone CAP_ACK complete our side in
+        // case our own announcement was lost, so robustness is preserved.
+        if (packet.packetType == PacketType.CAPABILITY || handshakeDeferred != null) {
+            sendCapability(PacketType.CAPABILITY_ACK)
+        }
 
         handshakeDeferred?.let { deferred ->
             val now = System.currentTimeMillis()
@@ -571,6 +607,15 @@ abstract class BaseTransportEngine(
     private suspend fun handleMessagePacket(packet: Packet) {
         link { packetsReceived++ }
         val messageId = packet.messageId
+
+        // Already delivered this session (frame duplication, or a
+        // retransmission that arrived after assembly): re-ACK, never re-process.
+        if (messageId in completedMessages) {
+            link { duplicatePackets++ }
+            sendAck(packet, null)
+            return
+        }
+
         if (packet.packetType == PacketType.START) {
             receiveBuffers.computeIfAbsent(messageId) { InProgressMessage(packet.language) }
             sendAck(packet, null)
@@ -661,6 +706,7 @@ abstract class BaseTransportEngine(
         }
 
         receiveBuffers.remove(messageId)
+        completedMessages.add(messageId)
         val payload = Packetizer.assemble(buf.parts)
 
         val reassembled = ReassembledPayload(

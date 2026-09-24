@@ -1,14 +1,21 @@
 package com.example.itantra.ui.main
 
 import android.app.Application
+import android.content.Context
+import android.os.BatteryManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.itantra.*
 import com.example.itantra.codec.*
-import com.example.itantra.data.ExperimentLogger
+import com.example.itantra.data.*
 import com.example.itantra.metrics.MetricsEngine
+import com.example.itantra.ops.EmergencyController
+import com.example.itantra.ops.LowPowerController
+import com.example.itantra.ops.OperationMode
+import com.example.itantra.ops.OperationModeController
 import com.example.itantra.speech.stt.VoskSTTEngine
 import com.example.itantra.speech.tts.AndroidTTSEngine
+import com.example.itantra.speech.tts.PresenceAwareTTS
 import com.example.itantra.transport.*
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -20,6 +27,7 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
+import java.io.File
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -27,8 +35,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val sttEngine = VoskSTTEngine()
     private val ttsEngine = AndroidTTSEngine()
+
+    /**
+     * Phase 18: TTS only speaks while the operator has announcement audio on
+     * AND a listener is plausibly present (a live link exists). Every withheld
+     * utterance is counted and surfaced, never silently dropped.
+     */
+    private val presenceAwareTTS = PresenceAwareTTS(ttsEngine) {
+        _uiState.value.announceAudio &&
+            (_uiState.value.isConnected || _uiState.value.transportMode == TransportType.SIMULATED)
+    }
     private val retroCodec = RetroSpeechCodec()
     private val baselineCodec = BaselineCodec()
+
+    // Phase 19/20: operation modes + emergency state machine (pure controllers).
+    private val opController = OperationModeController()
+    private val emergencyController = EmergencyController()
+
+    // Phase 24: battery-driven power governor fed by the real OS battery level.
+    private val lowPowerController = LowPowerController {
+        val raw = batteryPercent()
+        if (raw < 0) 100 else raw.coerceAtMost(100)
+    }
+
+    /** Phase 22: model presence probe — a file really on this device. */
+    private val modelProbe = ModelManager.ModelProbe { entry ->
+        File(app.filesDir, entry.id).exists()
+    }
 
     private val networkSimulator = NetworkSimulator()
     private val wifiTransport = WifiTransportEngine(networkSimulator)
@@ -86,6 +119,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val lastSendReport: SpeechPipeline.SpeechSendReport? = null,
         val metrics: MetricsEngine.FullMetrics? = null,
         val codecComparison: EncodingComparison? = null,
+        val experimentSummary: List<ExperimentSummary> = emptyList(),
         val speechLoopback: CodecLabResult? = null,
         val isPTTMode: Boolean = false,
         val activeTab: Int = 0,
@@ -100,7 +134,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val signalStrength: Int = 0,
         val packetCount: Pair<Int, Int> = Pair(0, 0),
         val compressionPercent: Double = 0.0,
-        val latencyMs: Long = 0
+        val latencyMs: Long = 0,
+
+        // P19-24 system status surfaced by the dashboard.
+        val opMode: OperationMode = OperationMode.NORMAL,
+        val opModeHistory: List<String> = emptyList(),
+        val emergencyActive: Boolean = false,
+        val emergencyReason: String? = null,
+        val emergencyClosedCount: Int = 0,
+        val batteryPercentRaw: Int = -1,
+        val powerProfile: String = "HEALTHY",
+        val modelsUsable: Int = 0,
+        val modelsTotal: Int = 0,
+        val ttsSuppressedSpeeches: Int = 0,
+        val announceAudio: Boolean = true,
+        val benchmarkResults: List<BenchmarkResult> = emptyList(),
+        val benchmarkRunning: Boolean = false,
+        val progressivePreview: String = "",
+        val progressivePreviewBytes: Int = 0,
+        val progressiveQuality: Float = 0f
     )
 
     data class CodecLabState(
@@ -114,6 +166,104 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         startObservation()
+        refreshSystemStatus()
+    }
+
+    // ------------------------------------------------------------------
+    // System status helpers (real device readings, honestly labeled)
+    // ------------------------------------------------------------------
+
+    private fun batteryPercent(): Int {
+        val bm = app.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
+            ?: return -1
+        return bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+    }
+
+    private fun refreshSystemStatus() {
+        val resolutions = ModelManager.resolve(modelProbe)
+        _uiState.update {
+            it.copy(
+                batteryPercentRaw = batteryPercent(),
+                powerProfile = lowPowerController.profile.name,
+                modelsUsable = resolutions.count { it.isUsable },
+                modelsTotal = resolutions.size,
+                ttsSuppressedSpeeches = presenceAwareTTS.suppressedSpeeches,
+                opModeHistory = opController.history.takeLast(6)
+                    .map { t -> "${t.from} -> ${t.to} (${t.cause})" },
+                emergencyClosedCount = emergencyController.countClosed()
+            )
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Operation mode + emergency controls (Phase 19/20)
+    // ------------------------------------------------------------------
+
+    fun switchOperationMode(mode: OperationMode) {
+        opController.switchTo(mode, "operator switch")
+        _uiState.update {
+            it.copy(
+                opMode = opController.mode,
+                opModeHistory = opController.history.takeLast(6)
+                    .map { t -> "${t.from} -> ${t.to} (${t.cause})" }
+            )
+        }
+    }
+
+    fun raiseEmergency() {
+        emergencyController.raise("operator-triggered")
+        // The latched alert mode is entered; audio stays enabled for the alarm.
+        opController.switchTo(OperationMode.EMERGENCY, "emergency raised")
+        _uiState.update {
+            it.copy(
+                emergencyActive = emergencyController.isActive,
+                emergencyReason = emergencyController.currentReason,
+                opMode = opController.mode,
+                opModeHistory = opController.history.takeLast(6)
+                    .map { t -> "${t.from} -> ${t.to} (${t.cause})" }
+            )
+        }
+    }
+
+    fun acknowledgeEmergency() {
+        val acked = emergencyController.acknowledge("operator")
+        opController.acknowledgeEmergency("operator")
+        _uiState.update {
+            it.copy(
+                emergencyActive = emergencyController.isActive,
+                emergencyReason = emergencyController.currentReason,
+                opMode = opController.mode,
+                opModeHistory = opController.history.takeLast(6)
+                    .map { t -> "${t.from} -> ${t.to} (${t.cause})" },
+                emergencyClosedCount = emergencyController.countClosed()
+            )
+        }
+        refreshSystemStatus()
+    }
+
+    fun setAnnounceAudio(enabled: Boolean) {
+        _uiState.update { it.copy(announceAudio = enabled) }
+        refreshSystemStatus()
+    }
+
+    // ------------------------------------------------------------------
+    // Benchmark (Phase 27, surfaced here): real JVM round-trips, labeled.
+    // ------------------------------------------------------------------
+
+    fun runBenchmark() {
+        if (_uiState.value.benchmarkRunning) return
+        _uiState.update { it.copy(benchmarkRunning = true) }
+        viewModelScope.launch {
+            val corpus = "I need help near the railway station please come immediately and bring water."
+            val scenarios = listOf(
+                BenchmarkScenario("RETRO", retroCodec, corpus, Language.ENGLISH, 30),
+                BenchmarkScenario("BASELINE", baselineCodec, corpus, Language.ENGLISH, 30)
+            )
+            val results = withContext(Dispatchers.Default) {
+                BenchmarkRunner().run(scenarios)
+            }
+            _uiState.update { it.copy(benchmarkRunning = false, benchmarkResults = results) }
+        }
     }
 
     // ------------------------------------------------------------------
@@ -140,7 +290,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         speechPipeline = SpeechPipeline(
             context = getApplication(),
             sttEngine = sttEngine,
-            ttsEngine = ttsEngine,
+            ttsEngine = presenceAwareTTS,
             speechCodec = currentCodec(),
             transport = engine,
             metricsEngine = app.metricsEngine
@@ -393,12 +543,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Send the manual text field (or a default sample when empty). */
     fun sendManual(textOverride: String? = null) {
         val text = (textOverride ?: _manualText.value).ifBlank { "I need help." }
+        recordProgressiveStage(text)
         speechPipeline?.launchSend(text, _uiState.value.currentLanguage, forceEmergency = false)
     }
 
     fun sendEmergency() {
         val text = _manualText.value.ifBlank { "I need help." }
+        recordProgressiveStage(text)
         speechPipeline?.launchSend(text, _uiState.value.currentLanguage, forceEmergency = true)
+    }
+
+    /**
+     * Phase 13: publish the instantly-available preview stage with its real,
+     * measured quality versus the full message. Both numbers come from the
+     * actual message text — never from a model of quality.
+     */
+    private fun recordProgressiveStage(text: String) {
+        val plan = ProgressiveTransmission.plan(text.toByteArray(Charsets.UTF_8).size)
+        val preview = ProgressiveTransmission.preview(text, plan)
+        _uiState.update {
+            it.copy(
+                progressivePreview = preview,
+                progressivePreviewBytes = plan.previewBytes,
+                progressiveQuality = ProgressiveTransmission.measuredQuality(text, preview)
+            )
+        }
     }
 
     fun startRecording() {
@@ -553,7 +722,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             Language.ENGLISH -> "I need help."
             Language.HINDI -> "मुझे मदद चाहिए।"
             Language.TAMIL -> "எனக்கு உதவி தேவை."
-            else -> ""
+            // P21 languages: community translations pending — fall back to the
+            // English template rather than emitting an empty or fake phrase.
+            else -> "I need help."
         }
         _codecLab.update { it.copy(input = sentence, language = language) }
     }
@@ -564,11 +735,42 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun runExperiment(phrase: String) {
         viewModelScope.launch {
-            val comparison = retroCodec.encodeWithComparison(phrase, _uiState.value.currentLanguage)
-            _uiState.value = _uiState.value.copy(codecComparison = comparison)
+            val language = _uiState.value.currentLanguage
+
+            // Phase 25/26: the A/B engine assigns the condition for this trial
+            // (balanced block randomization); every measurement below is real.
+            val arm = app.experimentEngine.nextArm()
+            val codec = if (arm.codec == "BASELINE") baselineCodec else retroCodec
+            val lab = codec.performLab(phrase, language)
+            val comparison = codec.encodeWithComparison(phrase, language)
+
+            val accepted = app.experimentEngine.record(
+                ExperimentOutcome(
+                    unitId = app.experimentEngine.assigned,
+                    armId = arm.id,
+                    success = lab.exactMatch,
+                    originalBytes = lab.originalUtf8Bytes,
+                    encodedBytes = lab.encodedBytes,
+                    packetCount = lab.packetCount,
+                    encodeMs = (lab.encodeMs + lab.packetizeMs).coerceAtLeast(0),
+                    decodeMs = lab.decodeMs.coerceAtLeast(0),
+                    totalMs = lab.totalMs.coerceAtLeast(0),
+                    compressionPercentage = lab.compressionPercent
+                )
+            )
+
+            _uiState.value = _uiState.value.copy(
+                codecComparison = comparison,
+                experimentSummary = app.experimentEngine.summarize(),
+                messageInfo = _uiState.value.messageInfo.copy(
+                    detail = "trial ${app.experimentEngine.assigned}: arm ${arm.id}, " +
+                        "${lab.packetCount} pkt, ${if (lab.exactMatch) "exact" else "FAILED"}" +
+                        if (!accepted) " (invalid sample rejected)" else ""
+                )
+            )
 
             app.experimentLogger.logEntry(
-                language = _uiState.value.currentLanguage,
+                language = language,
                 message = phrase,
                 originalBytes = comparison.originalUtf8Bytes,
                 encodedBytes = comparison.retroEncodedBytes,
@@ -576,12 +778,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 packetLoss = _uiState.value.linkMetrics.packetLoss,
                 retransmissions = _uiState.value.linkMetrics.retransmissions,
                 sttLatencyMs = 0,
-                encodeLatencyMs = 0,
+                encodeLatencyMs = lab.encodeMs.coerceAtLeast(0),
                 transportLatencyMs = 0,
-                decodeLatencyMs = 0,
+                decodeLatencyMs = lab.decodeMs.coerceAtLeast(0),
                 ttsLatencyMs = 0,
-                totalLatencyMs = 0,
-                codecType = if (useRetroCodec) "RETRO" else "BASELINE",
+                totalLatencyMs = lab.totalMs.coerceAtLeast(0),
+                codecType = if (arm.codec == "BASELINE") "BASELINE" else "RETRO",
                 compressionPercentage = comparison.compressionPercentage
             )
         }

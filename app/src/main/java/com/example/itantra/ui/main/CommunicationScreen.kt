@@ -7,6 +7,7 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -29,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.itantra.SpeechPipeline
 import com.example.itantra.codec.CodecLabResult
+import com.example.itantra.ops.OperationMode
 import com.example.itantra.transport.ConnectionStatus
 import com.example.itantra.transport.TransportType
 import com.example.itantra.ui.theme.*
@@ -468,6 +470,89 @@ fun ManualSendPanel(uiState: MainViewModel.UIState, viewModel: MainViewModel) {
                     shape = RoundedCornerShape(8.dp)
                 ) {
                     Text("🚨 EMERGENCY", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, color = RetroWhite)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            OpsControlRow(uiState, viewModel)
+        }
+    }
+}
+
+@Composable
+private fun OpsControlRow(uiState: MainViewModel.UIState, viewModel: MainViewModel) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, RetroAmber.copy(alpha = 0.3f), RoundedCornerShape(8.dp)),
+        colors = CardDefaults.cardColors(containerColor = RetroSurface),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(
+                text = "OPERATION MODE (P19)",
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                color = RetroGray,
+                letterSpacing = 1.sp
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(OperationMode.NORMAL, OperationMode.SILENT, OperationMode.PTT).forEach { mode ->
+                    OutlinedButton(
+                        onClick = { viewModel.switchOperationMode(mode) },
+                        enabled = !uiState.emergencyActive,
+                        shape = RoundedCornerShape(6.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = if (uiState.opMode == mode) RetroAmber.copy(alpha = 0.25f) else RetroSurface,
+                            contentColor = RetroCyan
+                        ),
+                        border = BorderStroke(
+                            1.dp,
+                            if (uiState.opMode == mode) RetroAmber else RetroDarkGray
+                        ),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                    ) {
+                        Text(mode.name, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (uiState.emergencyActive) {
+                    Button(
+                        onClick = { viewModel.acknowledgeEmergency() },
+                        colors = ButtonDefaults.buttonColors(containerColor = RetroRed),
+                        shape = RoundedCornerShape(6.dp)
+                    ) {
+                        Text("ACK EMERGENCY", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = RetroWhite)
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    StatusRow("ALERT:", uiState.emergencyReason ?: "active", RetroRed)
+                } else {
+                    Button(
+                        onClick = { viewModel.raiseEmergency() },
+                        colors = ButtonDefaults.buttonColors(containerColor = RetroSurface),
+                        shape = RoundedCornerShape(6.dp),
+                        border = BorderStroke(1.dp, RetroRed)
+                    ) {
+                        Text("RAISE ALERT", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = RetroRed)
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    OutlinedButton(
+                        onClick = { viewModel.setAnnounceAudio(!uiState.announceAudio) },
+                        shape = RoundedCornerShape(6.dp),
+                        border = BorderStroke(1.dp, if (uiState.announceAudio) RetroGreen else RetroDarkGray),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            "ANNOUNCE ${if (uiState.announceAudio) "ON" else "OFF"}",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp,
+                            color = if (uiState.announceAudio) RetroGreen else RetroGray
+                        )
+                    }
                 }
             }
         }

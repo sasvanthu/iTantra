@@ -71,6 +71,13 @@ class AndroidTTSEngine : TTSEngine {
             Language.ENGLISH -> Locale.US
             Language.HINDI -> Locale("hi", "IN")
             Language.TAMIL -> Locale("ta", "IN")
+            Language.BENGALI -> Locale("bn", "IN")
+            Language.TELUGU -> Locale("te", "IN")
+            Language.MARATHI -> Locale("mr", "IN")
+            Language.GUJARATI -> Locale("gu", "IN")
+            Language.KANNADA -> Locale("kn", "IN")
+            Language.MALAYALAM -> Locale("ml", "IN")
+            Language.ODIA -> Locale("or", "IN")
             else -> Locale.US
         }
     }

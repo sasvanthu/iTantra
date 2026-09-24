@@ -53,7 +53,9 @@ object Packetizer {
     ): List<Packet> {
         val packets = mutableListOf<Packet>()
 
-        packets.add(Packet.createStartPacket(messageId, language))
+        // START / END carry the MESSAGE's priority so a priority scheduler
+        // keeps a message's START|DATA|END frames in order inside one bucket.
+        packets.add(Packet.createStartPacket(messageId, language, priority.toByte()))
 
         val chunks = chunk(payload, maxPayload)
         chunks.forEachIndexed { index, chunk ->
@@ -67,7 +69,7 @@ object Packetizer {
             )
         }
 
-        packets.add(Packet.createEndPacket(messageId, language, chunks.size))
+        packets.add(Packet.createEndPacket(messageId, language, chunks.size, priority.toByte()))
         return packets
     }
 }

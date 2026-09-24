@@ -106,8 +106,21 @@ class MeshTransportEngine(
     /** Per-node relay counters surfaced on the Hardware Test relay panel. */
     val relayStats: StateFlow<MeshRelayStats> = _relayStats.asStateFlow()
 
+    /** Store-and-forward retention while no destination edge is reachable. */
+    private val storeForwardQueue = StoreAndForwardQueue()
+
+    private val _storeForwardStats = MutableStateFlow(StoreForwardStats())
+    /** QUEUED / FORWARDED / EXPIRED / DROPPED counters for the relay panel. */
+    val storeForwardStats: StateFlow<StoreForwardStats> = _storeForwardStats.asStateFlow()
+
     fun clearRelayStats() {
         _relayStats.value = MeshRelayStats()
+    }
+
+    /** Retune store-and-forward retention policy live (Phase 11). */
+    fun configureStoreForward(maxQueueSize: Int, maxMessageAgeMs: Long) {
+        storeForwardQueue.maxQueueSize = maxQueueSize
+        storeForwardQueue.maxMessageAgeMs = maxMessageAgeMs
     }
 
     private val messageIdCounter = AtomicLong(1)
@@ -115,6 +128,12 @@ class MeshTransportEngine(
     private var lastDupSeen = 0
     private var lastGapsSeen = 0
     private var lastDroppedSeen = 0
+
+    init {
+        meshScope.launch {
+            storeForwardQueue.stats.collect { _storeForwardStats.value = it }
+        }
+    }
 
     companion object {
         private const val PROTOCOL_VERSION = 1
@@ -235,9 +254,80 @@ class MeshTransportEngine(
     ): SendResult? {
         if (data.isEmpty()) return null
         val liveCount = isConnectedCount()
-        if (liveCount == 0) return null
+        if (liveCount == 0) {
+            return queueForDelivery(data, language, isEmergency, priority)
+        }
 
         val messageId = messageIdCounter.getAndIncrement()
+        return transmitPrepared(
+            messageId = messageId,
+            data = data,
+            language = language,
+            isEmergency = isEmergency,
+            priority = priority,
+            liveCount = liveCount
+        )
+    }
+
+    /**
+     * No reachable edge: retain the message and deliver it the moment any
+     * edge reconnects. Never silently drops traffic — arrivals below current
+     * retention are counted as DROPPED by the queue policy.
+     */
+    private fun queueForDelivery(
+        data: ByteArray,
+        language: Language,
+        isEmergency: Boolean,
+        priority: Byte
+    ): SendResult {
+        val messageId = messageIdCounter.getAndIncrement()
+        val enqueued = storeForwardQueue.enqueue(data, language, isEmergency, priority)
+        val accepted = enqueued is StoreAndForwardResult.Accepted
+        val detail = when (enqueued) {
+            is StoreAndForwardResult.Accepted ->
+                if (enqueued.droppedToMakeRoom) "queued (displaced lower-priority traffic)"
+                else "queued (store-and-forward)"
+            is StoreAndForwardResult.Dropped -> "dropped: ${enqueued.reason}"
+        }
+        _messageInfo.update {
+            it.copy(
+                state = if (accepted) MessageState.TRANSMITTING else MessageState.FAILED,
+                detail = detail,
+                originalBytes = data.size,
+                encodedBytes = data.size,
+                packetCount = 0,
+                isEmergency = isEmergency,
+                failed = !accepted
+            )
+        }
+        emitEvent(LinkMessageEvent.Transmitted(
+            messageId = messageId,
+            transmittedBytes = 0,
+            packetCount = 0,
+            retransmissions = 0,
+            roundTripTimeMs = 0,
+            failed = !accepted
+        ))
+        return SendResult(
+            messageId = messageId,
+            transmittedBytes = 0,
+            packetCount = 0,
+            retransmissions = 0,
+            roundTripTimeMs = 0,
+            failed = !accepted,
+            detail = detail
+        )
+    }
+
+    /** Flood a prepared application payload over every live edge. */
+    private suspend fun transmitPrepared(
+        messageId: Long,
+        data: ByteArray,
+        language: Language,
+        isEmergency: Boolean,
+        priority: Byte,
+        liveCount: Int
+    ): SendResult {
         val packets = Packetizer.buildPackets(
             payload = data,
             language = language,
@@ -307,6 +397,29 @@ class MeshTransportEngine(
     }
 
     private data class FloodStats(val bytes: Int, val okCount: Int, val failCount: Int)
+
+    /**
+     * Deliver retained store-and-forward messages once any edge is reachable.
+     * Keeps a message queued if it cannot reach a live edge; CRITICAL traffic
+     * always drains first because the queue orders by priority.
+     */
+    private fun scheduleFlush() {
+        meshScope.launch {
+            while (isConnectedCount() > 0) {
+                val msg = storeForwardQueue.peekNext() ?: break
+                val result = transmitPrepared(
+                    messageId = messageIdCounter.getAndIncrement(),
+                    data = msg.data,
+                    language = msg.language,
+                    isEmergency = msg.isEmergency,
+                    priority = msg.priority,
+                    liveCount = isConnectedCount()
+                )
+                if (result.failed) break
+                storeForwardQueue.markForwarded(msg)
+            }
+        }
+    }
 
     /** Mirror [envelope] out of every connected edge except [except]. */
     private suspend fun flood(envelope: ByteArray, except: TransportEngine? = null): FloodStats {
@@ -442,6 +555,7 @@ class MeshTransportEngine(
         }
 
         if (status == ConnectionStatus.CONNECTED) {
+            scheduleFlush()
             val neighbors = live.mapNotNull { it.session.value?.remoteDeviceId }.distinct().sorted()
             val neighborId = neighbors.joinToString(",")
             val current = _session.value

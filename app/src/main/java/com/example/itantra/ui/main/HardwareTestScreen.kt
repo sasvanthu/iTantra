@@ -220,17 +220,12 @@ fun HardwareTestScreen(viewModel: HardwareTestViewModel = viewModel()) {
 
         Spacer(modifier = Modifier.height(12.dp))
         MetricSection("SPEECH → STT → CODEC → BLE (NO TTS)") {
-            HwChipRow("LANG", listOf("EN", "TA", "HI"),
-                when (state.speechLanguage) {
-                    Language.ENGLISH -> 0
-                    Language.TAMIL -> 1
-                    else -> 2
-                }) {
-                viewModel.setSpeechLanguage(when (it) {
-                    0 -> Language.ENGLISH
-                    1 -> Language.TAMIL
-                    else -> Language.HINDI
-                })
+            // The lab speaks only the languages with a bundled offline STT
+            // model; P21 languages are surfaced in the app language pickers.
+            val hwLanguages = listOf(Language.ENGLISH, Language.TAMIL, Language.HINDI)
+            HwChipRow("LANG", hwLanguages.map { it.code.uppercase() },
+                hwLanguages.indexOf(state.speechLanguage).coerceAtLeast(0)) {
+                viewModel.setSpeechLanguage(hwLanguages[it])
             }
             Spacer(modifier = Modifier.height(6.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
