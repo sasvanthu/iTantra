@@ -22,7 +22,6 @@ import com.example.itantra.ui.theme.*
 @Composable
 fun SettingsScreen(viewModel: MainViewModel) {
     val uiState by viewModel.uiState.collectAsState()
-    var ipAddress by remember { mutableStateOf("") }
     var port by remember { mutableStateOf(uiState.port) }
 
     Column(
@@ -43,51 +42,8 @@ fun SettingsScreen(viewModel: MainViewModel) {
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // Connection Section
-        SettingsSection("CONNECTION") {
-            // Role selector
-            Text(
-                text = "ROLE:",
-                fontFamily = FontFamily.Monospace,
-                fontSize = 12.sp,
-                color = RetroGray
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Row {
-                RoleOption("SERVER", uiState.isServer) { viewModel.startServer() }
-                Spacer(modifier = Modifier.width(8.dp))
-                RoleOption("CLIENT", !uiState.isServer) { /* Show connect UI */ }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // IP Address input
-            Text(
-                text = "IP ADDRESS:",
-                fontFamily = FontFamily.Monospace,
-                fontSize = 12.sp,
-                color = RetroGray
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            OutlinedTextField(
-                value = ipAddress,
-                onValueChange = { ipAddress = it },
-                modifier = Modifier.fillMaxWidth(),
-                textStyle = androidx.compose.ui.text.TextStyle(
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 14.sp,
-                    color = RetroCyan
-                ),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = RetroAmber,
-                    unfocusedBorderColor = RetroDarkGray
-                ),
-                singleLine = true
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Port input
+        // Port configuration
+        SettingsSection("LINK") {
             Text(
                 text = "PORT:",
                 fontFamily = FontFamily.Monospace,
@@ -110,42 +66,96 @@ fun SettingsScreen(viewModel: MainViewModel) {
                 ),
                 singleLine = true
             )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Both phones must use the same port. Host/connect live on the LINK tab.",
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+                color = RetroGray
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Network simulation
+        SettingsSection("NETWORK SIMULATION (DEBUG)") {
+            if (uiState.simulationEnabled) {
+                Text(
+                    text = "● SIMULATION ACTIVE — results are synthetic, never real-world data",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    color = RetroOrange
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(RetroSurface)
+                    .clickable { viewModel.toggleSimulation(!uiState.simulationEnabled) }
+                    .padding(12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "SIMULATED LINK (loopback)",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 13.sp,
+                    color = RetroWhite
+                )
+                Switch(
+                    checked = uiState.simulationEnabled,
+                    onCheckedChange = { viewModel.toggleSimulation(it) },
+                    colors = SwitchDefaults.colors(
+                        checkedTrackColor = RetroOrange,
+                        uncheckedTrackColor = RetroDarkGray
+                    )
+                )
+            }
 
             Spacer(modifier = Modifier.height(12.dp))
-
-            // Connect button
-            if (!uiState.isServer && ipAddress.isNotBlank()) {
-                Button(
-                    onClick = { viewModel.connectToServer(ipAddress) },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = RetroAmber),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Text(
-                        text = "CONNECT",
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
-                        color = RetroBackground
+            Text(
+                text = "PACKET LOSS:",
+                fontFamily = FontFamily.Monospace,
+                fontSize = 12.sp,
+                color = RetroGray
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Row {
+                listOf(0f, 0.05f, 0.10f, 0.20f).forEach { rate ->
+                    SimOption(
+                        label = "${(rate * 100).toInt()}%",
+                        selected = uiState.simConfig.lossRate == rate,
+                        onClick = { viewModel.setSimLoss(rate) }
                     )
+                    Spacer(modifier = Modifier.width(6.dp))
                 }
             }
 
-            // Disconnect button
-            if (uiState.isConnected) {
-                Button(
-                    onClick = { viewModel.disconnect() },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = RetroRed),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Text(
-                        text = "DISCONNECT",
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
-                        color = RetroWhite
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = "ONE-WAY LATENCY:",
+                fontFamily = FontFamily.Monospace,
+                fontSize = 12.sp,
+                color = RetroGray
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Row {
+                listOf(0L, 50L, 100L, 250L).forEach { ms ->
+                    SimOption(
+                        label = "${ms}ms",
+                        selected = uiState.simConfig.latencyMs == ms,
+                        onClick = { viewModel.setSimLatency(ms) }
                     )
+                    Spacer(modifier = Modifier.width(6.dp))
                 }
             }
+
+            Spacer(modifier = Modifier.height(12.dp))
+            ToggleRow("DUPLICATION", uiState.simConfig.duplicationRate > 0f) { viewModel.setSimDuplication(it) }
+            Spacer(modifier = Modifier.height(8.dp))
+            ToggleRow("CORRUPTION", uiState.simConfig.corruptionRate > 0f) { viewModel.setSimCorruption(it) }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -251,6 +261,55 @@ fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) 
             Spacer(modifier = Modifier.height(12.dp))
             content()
         }
+    }
+}
+
+@Composable
+fun SimOption(label: String, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(if (selected) RetroAmber else RetroSurface)
+            .border(1.dp, if (selected) RetroAmber else RetroDarkGray, RoundedCornerShape(4.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 8.dp)
+    ) {
+        Text(
+            text = label,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            color = if (selected) RetroBackground else RetroGray
+        )
+    }
+}
+
+@Composable
+fun ToggleRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(4.dp))
+            .background(RetroSurface)
+            .clickable { onChange(!checked) }
+            .padding(12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 13.sp,
+            color = RetroWhite
+        )
+        Switch(
+            checked = checked,
+            onCheckedChange = onChange,
+            colors = SwitchDefaults.colors(
+                checkedTrackColor = RetroOrange,
+                uncheckedTrackColor = RetroDarkGray
+            )
+        )
     }
 }
 

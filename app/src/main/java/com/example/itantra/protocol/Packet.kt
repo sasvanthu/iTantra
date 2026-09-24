@@ -161,7 +161,47 @@ data class Packet(
             language: Language,
             payload: ByteArray
         ): Packet {
-            return createTextPacket(messageId, sequenceId, language, payload, priority = 0)
+            // Emergency packets keep the codec importance level so metrics on
+            // both sides report the true priority (CRITICAL = 3).
+            return createTextPacket(messageId, sequenceId, language, payload, priority = 3)
+        }
+
+        fun createCapabilityPacket(messageId: Long, language: Language, capability: ByteArray): Packet {
+            return createGeneric(messageId, 0, language, PacketType.CAPABILITY, capability, priority = 1)
+        }
+
+        fun createCapabilityAckPacket(messageId: Long, language: Language, capability: ByteArray): Packet {
+            return createGeneric(messageId, 0, language, PacketType.CAPABILITY_ACK, capability, priority = 1)
+        }
+
+        fun createGeneric(
+            messageId: Long,
+            sequenceId: Int,
+            language: Language,
+            type: PacketType,
+            payload: ByteArray,
+            priority: Byte = 1
+        ): Packet {
+            val crc = if (payload.isEmpty()) 0 else {
+                val headerData = ByteArray(16)
+                System.arraycopy(longToBytes(messageId), 0, headerData, 0, 8)
+                System.arraycopy(intToBytes(sequenceId), 0, headerData, 8, 4)
+                headerData[12] = Language.toByte(language)
+                headerData[13] = type.id
+                headerData[14] = priority
+                headerData[15] = 0
+                computeCRC(headerData + payload)
+            }
+            return Packet(
+                messageId = messageId,
+                sequenceId = sequenceId,
+                language = language,
+                packetType = type,
+                priority = priority,
+                payloadLength = payload.size,
+                payload = payload,
+                crc = crc
+            )
         }
 
         fun createStartPacket(messageId: Long, language: Language): Packet {
@@ -174,13 +214,21 @@ data class Packet(
             )
         }
 
-        fun createEndPacket(messageId: Long, language: Language): Packet {
+        fun createEndPacket(messageId: Long, language: Language, dataCount: Int): Packet {
+            // The END payload carries the total number of DATA packets, so the
+            // receiver can detect a lost tail even when the last DATA is dropped.
+            val payload = byteArrayOf(
+                (dataCount shr 24).toByte(),
+                (dataCount shr 16).toByte(),
+                (dataCount shr 8).toByte(),
+                dataCount.toByte()
+            )
             return Packet(
                 messageId = messageId,
                 sequenceId = -1,
                 language = language,
                 packetType = PacketType.END,
-                payload = byteArrayOf()
+                payload = payload
             )
         }
 

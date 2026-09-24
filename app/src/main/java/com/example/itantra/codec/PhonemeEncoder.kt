@@ -1,8 +1,20 @@
 package com.example.itantra.codec
 
+/**
+ * EXPERIMENTAL phoneme layer.
+ *
+ * The production path does NOT rely on phonemes yet: the first working
+ * prototype uses token IDs + escaped text. This class is an architecture
+ * placeholder for `text -> phoneme ids -> compact representation`, with a
+ * simplified per-script character map as the fallback implementation.
+ * Phoneme payloads are only emitted when explicitly enabled (see
+ * [BinaryCodec.FLAG_PHONEMES]).
+ */
 class PhonemeEncoder {
 
     companion object {
+        const val MODE: String = "EXPERIMENTAL"
+
         private val PHONEME_MAP = mapOf(
             // English phonemes (simplified IPA-based)
             'A' to 1, 'E' to 2, 'I' to 3, 'O' to 4, 'U' to 5,

@@ -29,10 +29,10 @@ enum class Language(val code: String, val displayName: String) {
 }
 
 enum class Importance(val level: Int) {
-    CRITICAL(0),
-    HIGH(1),
-    NORMAL(2),
-    LOW(3);
+    CRITICAL(3),
+    HIGH(2),
+    NORMAL(1),
+    LOW(0);
 
     companion object {
         fun fromLevel(level: Int): Importance =
@@ -50,7 +50,8 @@ enum class PacketType(val id: Byte) {
     EMERGENCY(0x07),
     HEARTBEAT(0x08),
     CAPABILITY(0x09),
-    LANGUAGE_INFO(0x0A);
+    LANGUAGE_INFO(0x0A),
+    CAPABILITY_ACK(0x0B);
 
     companion object {
         fun fromId(id: Byte): PacketType =
@@ -86,15 +87,23 @@ data class CommonSpeechRepresentation(
     val rawText: String = "",
     val timestamp: Long = System.currentTimeMillis()
 ) {
+    val originalText: String get() = rawText
+
     fun estimatedUtf8Size(): Int = rawText.toByteArray(Charsets.UTF_8).size
 }
 
 data class EncodedPayload(
     val data: ByteArray,
     val originalUtf8Size: Int,
-    val tokenEncodedSize: Int,
-    val phonemeEncodedSize: Int,
-    val finalEncodedSize: Int
+    val tokenEncodedSize: Int = 0,
+    val phonemeEncodedSize: Int = 0,
+    val finalEncodedSize: Int = 0,
+    val dictionaryTokens: Int = 0,
+    val escapedTokens: Int = 0,
+    val predictedTokens: Int = 0,
+    val punctTokens: Int = 0,
+    val messageId: Long = 0,
+    val importance: Importance = Importance.NORMAL
 ) {
     val compressionPercentage: Double
         get() = if (originalUtf8Size > 0)

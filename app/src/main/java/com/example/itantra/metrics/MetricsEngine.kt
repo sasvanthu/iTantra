@@ -12,7 +12,10 @@ class MetricsEngine {
         var transportLatencyMs: Long = 0,
         var decodingLatencyMs: Long = 0,
         var ttsLatencyMs: Long = 0,
-        var totalLatencyMs: Long = 0
+        var totalLatencyMs: Long = 0,
+        var networkReceiveLatencyMs: Long = 0,
+        var ackLatencyMs: Long = 0,
+        var roundTripTimeMs: Long = 0
     )
 
     data class SizeMetrics(
@@ -28,7 +31,13 @@ class MetricsEngine {
         var packetsReceived: Int = 0,
         var retransmissions: Int = 0,
         var packetLoss: Int = 0,
-        var throughput: Double = 0.0
+        var throughput: Double = 0.0,
+        var transmittedBytes: Long = 0,
+        var receivedBytes: Long = 0,
+        var totalPacketBytes: Int = 0,
+        var duplicatePackets: Int = 0,
+        var corruptedFrames: Int = 0,
+        var sessionCount: Int = 0
     )
 
     data class SystemMetrics(
@@ -90,6 +99,18 @@ class MetricsEngine {
         latency.totalLatencyMs = ms
     }
 
+    fun recordNetworkReceiveLatency(ms: Long) {
+        latency.networkReceiveLatencyMs = ms
+    }
+
+    fun recordAckLatency(ms: Long) {
+        latency.ackLatencyMs = ms
+    }
+
+    fun recordRoundTripTime(ms: Long) {
+        latency.roundTripTimeMs = ms
+    }
+
     fun recordSizeMetrics(
         originalUtf8: Int,
         tokenEncoded: Int,
@@ -119,6 +140,30 @@ class MetricsEngine {
 
     fun recordPacketLoss() {
         transportMetrics.packetLoss++
+    }
+
+    fun recordTransmittedBytes(bytes: Long) {
+        transportMetrics.transmittedBytes += bytes
+    }
+
+    fun recordReceivedBytes(bytes: Long) {
+        transportMetrics.receivedBytes += bytes
+    }
+
+    fun recordTotalPacketBytes(bytes: Int) {
+        transportMetrics.totalPacketBytes = bytes
+    }
+
+    fun recordDuplicatePacket() {
+        transportMetrics.duplicatePackets++
+    }
+
+    fun recordCorruptedFrame() {
+        transportMetrics.corruptedFrames++
+    }
+
+    fun recordSession() {
+        transportMetrics.sessionCount++
     }
 
     fun getSystemMetrics(): SystemMetrics {
@@ -178,5 +223,10 @@ class MetricsEngine {
         transportMetrics.packetsReceived = 0
         transportMetrics.retransmissions = 0
         transportMetrics.packetLoss = 0
+        transportMetrics.transmittedBytes = 0
+        transportMetrics.receivedBytes = 0
+        transportMetrics.totalPacketBytes = 0
+        transportMetrics.duplicatePackets = 0
+        transportMetrics.corruptedFrames = 0
     }
 }

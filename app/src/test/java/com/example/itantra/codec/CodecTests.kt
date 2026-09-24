@@ -152,7 +152,7 @@ class ImportanceScorerTest {
         )
         val filtered = scorer.filterByImportance(tokens, Importance.HIGH)
         assertEquals(2, filtered.size)
-        assertTrue(filtered.all { it.importance.level <= Importance.HIGH.level })
+        assertTrue(filtered.all { it.importance.level >= Importance.HIGH.level })
     }
 }
 
@@ -242,39 +242,61 @@ class BaselineCodecTest {
     }
 }
 
-class PredictorTest {
+class ContextPredictorTest {
 
-    private lateinit var predictor: Predictor
+    private lateinit var predictor: ContextPredictor
 
     @Before
     fun setup() {
-        predictor = Predictor()
+        predictor = ContextPredictor()
     }
 
     @Test
-    fun `predict returns empty list when no context`() {
-        val predictions = predictor.predict()
-        assertTrue(predictions.isEmpty())
+    fun `nextPrediction returns OOV when no context`() {
+        assertEquals(ContextPredictor.OOV_ID, predictor.nextPrediction())
     }
 
     @Test
-    fun `updateContext adds tokens`() {
-        predictor.updateContext(1)
-        predictor.updateContext(2)
-        assertEquals(listOf(1, 2), predictor.getContext())
+    fun `note adds tokens to context window`() {
+        predictor.note(1)
+        predictor.note(2)
+        assertEquals(listOf(1, 2), predictor.getContextWindow())
     }
 
     @Test
     fun `context window respects max size`() {
-        repeat(10) { predictor.updateContext(it) }
-        assertTrue(predictor.getContext().size <= 3)
+        repeat(20) { predictor.note(it) }
+        assertTrue(predictor.getContextWindow().size <= 8)
+    }
+
+    @Test
+    fun `beginMessage resets everything`() {
+        predictor.note(1)
+        predictor.note(2)
+        predictor.beginMessage()
+        assertTrue(predictor.getContextWindow().isEmpty())
+        assertEquals(ContextPredictor.OOV_ID, predictor.nextPrediction())
+    }
+
+    @Test
+    fun `predicts a repeated token`() {
+        predictor.note(7)
+        predictor.note(7)
+        assertEquals(7, predictor.nextPrediction())
+    }
+
+    @Test
+    fun `wouldPredict is true for the next token of a repeated sequence`() {
+        predictor.note(3)
+        predictor.note(3)
+        assertTrue(predictor.wouldPredict(3))
     }
 
     @Test
     fun `clear resets context`() {
-        predictor.updateContext(1)
+        predictor.note(1)
         predictor.clear()
-        assertTrue(predictor.getContext().isEmpty())
+        assertTrue(predictor.getContextWindow().isEmpty())
     }
 }
 

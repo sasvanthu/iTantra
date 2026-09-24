@@ -1,91 +1,81 @@
 package com.example.itantra.transport
 
-import android.util.Log
-import com.example.itantra.protocol.Packet
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.flow.*
-import java.util.concurrent.ConcurrentLinkedQueue
 
-class SimulatedTransport : TransportEngine {
+/**
+ * In-process RETRO link.
+ *
+ * Two modes:
+ *  - **Self loopback** (default, single device): every frame the engine sends
+ *    is fed straight back through its own receive path, so a single phone can
+ *    exercise the full stack (capability handshake, framing, ACK/NACK,
+ *    reassembly, retransmission under simulation) without a peer.
+ *  - **Bound pair** (integration tests): [bindPeer] connects two engine
+ *    instances through [Channel]s so both host/device sides are real.
+ *
+ * Physical details are irrelevant here: [openLinkAsHost]/[openLinkAsClient]
+ * return immediately and the negotiated handshake happens over the loop.
+ */
+class SimulatedTransport(
+    networkSimulator: NetworkSimulator,
+    ackTimeoutMs: Long = 2000L,
+    maxRetries: Int = 3
+) : BaseTransportEngine(
+    transportType = TransportType.SIMULATED,
+    engineName = "SIMULATED",
+    networkSimulator = networkSimulator,
+    ackTimeoutMs = ackTimeoutMs,
+    maxRetries = maxRetries
+) {
 
-    companion object {
-        private const val TAG = "SimulatedTransport"
-    }
+    private val rxPipe = Channel<ByteArray>(Channel.UNLIMITED)
+    private var peerRx: Channel<ByteArray>? = null
 
-    private val _connectionStatus = MutableStateFlow(ConnectionStatus.DISCONNECTED)
-    override val connectionStatus: StateFlow<ConnectionStatus> = _connectionStatus
+    private var pumpStarted = false
 
-    private val _receivedPackets = Channel<Packet>(Channel.BUFFERED)
-    override val receivedPackets: Flow<Packet> = _receivedPackets.receiveAsFlow()
-
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private var packetLossRate = 0.0f
-    private var latencyMs = 0L
-
-    private var remoteTransport: SimulatedTransport? = null
-
-    fun setPacketLoss(rate: Float) {
-        packetLossRate = rate.coerceIn(0f, 1f)
-    }
-
-    fun setLatency(ms: Long) {
-        latencyMs = ms
-    }
-
-    fun connectToRemote(remote: SimulatedTransport) {
-        remoteTransport = remote
-        _connectionStatus.value = ConnectionStatus.CONNECTED
-        remote._connectionStatus.value = ConnectionStatus.CONNECTED
-    }
-
-    override suspend fun startServer(port: Int) {
-        _connectionStatus.value = ConnectionStatus.CONNECTED
-    }
-
-    override suspend fun connect(host: String, port: Int) {
-        _connectionStatus.value = ConnectionStatus.CONNECTED
-    }
-
-    override suspend fun disconnect() {
-        _connectionStatus.value = ConnectionStatus.DISCONNECTED
-        remoteTransport?._connectionStatus?.value = ConnectionStatus.DISCONNECTED
-        remoteTransport = null
-    }
-
-    override suspend fun send(packet: Packet) {
-        if (_connectionStatus.value != ConnectionStatus.CONNECTED) return
-        if (remoteTransport == null) return
-
-        // Simulate packet loss
-        if (Math.random() < packetLossRate) {
-            Log.d(TAG, "Packet lost: msg=${packet.messageId} seq=${packet.sequenceId}")
-            return
+    private fun startPump() {
+        if (pumpStarted) return
+        pumpStarted = true
+        baseScope.launch {
+            for (chunk in rxPipe) {
+                deliverIncoming(chunk)
+            }
         }
+    }
 
-        // Simulate latency
-        if (latencyMs > 0) {
-            delay(latencyMs)
+    init {
+        startPump()
+    }
+
+    /** Wire this engine to another instance so they act as true peers. */
+    fun bindPeer(other: SimulatedTransport) {
+        other.startPump()
+        this.peerRx = other.rxPipe
+        other.peerRx = this.rxPipe
+    }
+
+    fun isLoopback(): Boolean = peerRx == null
+
+    override suspend fun openLinkAsHost(port: Int): Boolean = true
+
+    override suspend fun openLinkAsClient(host: String, port: Int): Boolean = true
+
+    override suspend fun writeRawFrame(frame: ByteArray) {
+        val peer = peerRx
+        if (peer != null) {
+            peer.send(frame)
+        } else {
+            // Strict FIFO, same coroutine: write path == read path, in order.
+            deliverIncoming(frame)
         }
-
-        remoteTransport!!._receivedPackets.send(packet)
     }
 
-    override fun getConnectionStatus(): ConnectionStatus = _connectionStatus.value
-
-    override fun getTransportType(): TransportType = TransportType.SIMULATED
-
-    fun getStats(): SimulatedTransportStats {
-        return SimulatedTransportStats(
-            packetLossRate = packetLossRate,
-            latencyMs = latencyMs,
-            connected = _connectionStatus.value == ConnectionStatus.CONNECTED
-        )
+    override suspend fun tearDown() {
+        // nothing physical to close
     }
+
+    override fun pollLocalAddress(): String =
+        if (peerRx == null) "loopback" else "simulated://virtual"
 }
-
-data class SimulatedTransportStats(
-    val packetLossRate: Float,
-    val latencyMs: Long,
-    val connected: Boolean
-)

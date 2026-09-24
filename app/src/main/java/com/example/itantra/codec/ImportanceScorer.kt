@@ -52,7 +52,7 @@ class ImportanceScorer {
         tokens: List<Token>,
         minImportance: Importance
     ): List<Token> {
-        return tokens.filter { it.importance.level <= minImportance.level }
+        return tokens.filter { it.importance.level >= minImportance.level }
     }
 
     fun prioritizePacket(tokens: List<Token>, bandwidthMode: BandwidthMode): List<Token> {

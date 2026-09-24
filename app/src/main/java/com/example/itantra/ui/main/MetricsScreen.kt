@@ -46,7 +46,10 @@ fun MetricsScreen(viewModel: MainViewModel) {
             MetricRow("STT:", "${metrics?.latency?.sttLatencyMs ?: 0} ms")
             MetricRow("Encoding:", "${metrics?.latency?.encodingLatencyMs ?: 0} ms")
             MetricRow("Packetization:", "${metrics?.latency?.packetizationLatencyMs ?: 0} ms")
-            MetricRow("Transport:", "${metrics?.latency?.transportLatencyMs ?: 0} ms")
+            MetricRow("Network send:", "${metrics?.latency?.transportLatencyMs ?: 0} ms")
+            MetricRow("Network receive:", "${metrics?.latency?.networkReceiveLatencyMs ?: 0} ms")
+            MetricRow("ACK latency:", "${metrics?.latency?.ackLatencyMs ?: 0} ms")
+            MetricRow("RTT:", "${metrics?.latency?.roundTripTimeMs ?: 0} ms", RetroAmber)
             MetricRow("Decoding:", "${metrics?.latency?.decodingLatencyMs ?: 0} ms")
             MetricRow("TTS:", "${metrics?.latency?.ttsLatencyMs ?: 0} ms")
             MetricRow("Total:", "${metrics?.latency?.totalLatencyMs ?: 0} ms", RetroAmber)
@@ -72,6 +75,28 @@ fun MetricsScreen(viewModel: MainViewModel) {
             MetricRow("Packets Received:", "${metrics?.transport?.packetsReceived ?: 0}")
             MetricRow("Retransmissions:", "${metrics?.transport?.retransmissions ?: 0}")
             MetricRow("Packet Loss:", "${metrics?.transport?.packetLoss ?: 0}")
+            MetricRow("TX Bytes:", "${uiState.linkMetrics.transmittedBytes}")
+            MetricRow("RX Bytes:", "${uiState.linkMetrics.receivedBytes}")
+            MetricRow("Duplicates:", "${uiState.linkMetrics.duplicatePackets}")
+            MetricRow("Corrupted frames:", "${uiState.linkMetrics.corruptedFrames}")
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Last send sizes
+        if (uiState.lastSendReport != null) {
+            val rep = uiState.lastSendReport!!
+            MetricSection("LAST SEND (CODEc vs WIRE)") {
+                MetricRow("UTF-8:", "${rep.originalUtf8Bytes} B")
+                MetricRow("Codec payload:", "${rep.encodedBytes} B")
+                MetricRow("Transmitted:", "${rep.transmittedBytes} B",
+                    if (rep.transmittedBytes <= rep.originalUtf8Bytes) RetroGreen else RetroOrange)
+                MetricRow("Packets:", "${rep.packetCount}")
+                MetricRow("Retries:", "${rep.retransmissions}",
+                    if (rep.retransmissions > 0) RetroAmber else RetroGreen)
+                MetricRow("Result:", if (rep.failed) "FAILED" else "DELIVERED + ACK",
+                    if (rep.failed) RetroRed else RetroGreen)
+            }
         }
 
         Spacer(modifier = Modifier.height(12.dp))

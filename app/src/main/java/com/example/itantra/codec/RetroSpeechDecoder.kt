@@ -1,11 +1,21 @@
 package com.example.itantra.codec
 
-import java.io.ByteArrayInputStream
-import java.io.DataInputStream
+/**
+ * Decodes a RETRO binary frame back into the exact normalized text.
+ *
+ * - Rejects frames whose CRC does not match.
+ * - Reconstructed PREDICTED tokens come from the decoder's own
+ *   [ContextPredictor], which is kept in lock-step with the encoder because
+ *   both rebuild identical per-message frequency tables.
+ * - Dictionary words are re-rendered to the original case via the stored
+ *   LOWER / TITLE / UPPER hint; ESCAPE tokens carry their exact text; the
+ *   punctuation catalog restores punctuation marks.
+ */
+class RetroSpeechDecoder(
+    private val predictor: ContextPredictor = ContextPredictor(),
+    private val binaryCodec: BinaryCodec = BinaryCodec()
+) {
 
-class RetroSpeechDecoder {
-
-    private val phonemeEncoder = PhonemeEncoder()
     private var dictionary: TokenDictionary? = null
 
     fun setDictionary(dictionary: TokenDictionary) {
@@ -13,90 +23,101 @@ class RetroSpeechDecoder {
     }
 
     fun decode(payload: ByteArray): DecodeResult {
-        val startTime = System.currentTimeMillis()
-
-        try {
-            val bais = ByteArrayInputStream(payload)
-            val dis = DataInputStream(bais)
-
-            // Read header
-            val magic = ByteArray(4)
-            dis.readFully(magic)
-            if (magic[0] != 0x52.toByte() || magic[1] != 0x45.toByte() ||
-                magic[2] != 0x54.toByte() || magic[3] != 0x52.toByte()) {
-                return DecodeResult.Error("Invalid magic bytes")
+        val start = System.nanoTime()
+        return try {
+            val frame = binaryCodec.decode(payload)
+            if (!frame.crcValid) {
+                return DecodeResult.Error(
+                    "CRC mismatch: stored=${frame.crcStored} computed=${frame.crcComputed}. Packet rejected."
+                )
+            }
+            if (frame.version > BinaryCodec.VERSION) {
+                return DecodeResult.Error("Unsupported frame version=${frame.version}")
             }
 
-            val version = dis.readByte()
-            val messageId = dis.readLong()
-            val sequenceId = dis.readInt()
-            val langByte = dis.readByte()
-            val language = Language.fromByte(langByte)
-
-            // Read tokens
-            val tokenCount = dis.readInt()
+            predictor.beginMessage()
+            val sb = StringBuilder()
             val tokens = mutableListOf<Token>()
 
-            repeat(tokenCount) {
-                val hasDictId = dis.readBoolean()
-                val token: Token = if (hasDictId) {
-                    val dictId = dis.readShort().toInt()
-                    val importance = Importance.fromLevel(dis.readByte().toInt())
-                    val flags = dis.readByte().toInt()
-                    val text = dictionary?.decode(dictId) ?: "[$dictId]"
-                    Token(
-                        text = text,
-                        id = dictId,
-                        importance = importance,
-                        isPredicted = (flags and 0x01) != 0
-                    )
-                } else {
-                    val tokenLen = dis.readShort().toInt()
-                    val tokenBytes = ByteArray(tokenLen)
-                    dis.readFully(tokenBytes)
-                    val text = String(tokenBytes, Charsets.UTF_8)
-                    val importance = Importance.fromLevel(dis.readByte().toInt())
-                    val flags = dis.readByte().toInt()
-                    Token(
-                        text = text,
-                        id = -1,
-                        importance = importance,
-                        isPredicted = (flags and 0x01) != 0
-                    )
+            for (spec in frame.tokens) {
+                val text: String
+                when (spec.kind) {
+                    BinaryCodec.Kind.WORD -> {
+                        val id = if (spec.predicted) {
+                            predictor.nextPrediction()
+                        } else {
+                            spec.dictId
+                        }
+                        val base = dictionary?.decode(id) ?: "[$id]"
+                        text = if (frame.language == Language.ENGLISH) {
+                            applyCase(base, spec.caseCode)
+                        } else {
+                            base
+                        }
+                        predictor.note(id)
+                    }
+                    BinaryCodec.Kind.ESCAPE -> {
+                        text = spec.text
+                        predictor.note(ContextPredictor.OOV_ID)
+                    }
+                    BinaryCodec.Kind.PUNCT -> {
+                        text = spec.text
+                        predictor.note(ContextPredictor.OOV_ID)
+                    }
+                    else -> {
+                        text = ""
+                        predictor.note(ContextPredictor.OOV_ID)
+                    }
                 }
-                tokens.add(token)
+
+                if (spec.spaceBefore && sb.isNotEmpty()) sb.append(' ')
+                sb.append(text)
+                tokens.add(
+                    Token(
+                        text = text,
+                        id = if (spec.kind == BinaryCodec.Kind.WORD) spec.dictId else -1,
+                        importance = spec.importance,
+                        isPredicted = spec.predicted
+                    )
+                )
             }
 
-            // Read phonemes
-            val phonemeCount = dis.readInt()
-            val phonemes = mutableListOf<Int>()
-            repeat(phonemeCount) {
-                phonemes.add(dis.readShort().toInt())
-            }
+            val reconstructedText = sb.toString()
+            val decodeMs = (System.nanoTime() - start) / 1_000_000L
 
-            // Read CRC
-            val receivedCRC = dis.readInt()
-
-            // Reconstruct text
-            val reconstructedText = tokens.joinToString(" ") { it.text }
-
-            val decodeTime = System.currentTimeMillis() - startTime
-
-            return DecodeResult.Success(
+            DecodeResult.Success(
                 representation = CommonSpeechRepresentation(
-                    language = language,
+                    language = frame.language,
                     tokens = tokens,
-                    phonemes = phonemes,
-                    messageId = messageId,
-                    sequenceId = sequenceId,
+                    phonemes = frame.phonemes,
+                    sentenceBoundaries = computeSentenceEnds(tokens),
+                    importance = tokens.map { it.importance },
+                    messageId = frame.messageId,
+                    sequenceId = frame.sequenceId,
                     rawText = reconstructedText
                 ),
                 reconstructedText = reconstructedText,
-                decodeLatencyMs = decodeTime
+                decodeLatencyMs = decodeMs
             )
-        } catch (e: Exception) {
-            return DecodeResult.Error("Decode error: ${e.message}")
+        } catch (e: CodecException) {
+            DecodeResult.Error("Decode error: ${e.message}")
         }
+    }
+
+    private fun computeSentenceEnds(tokens: List<Token>): List<Int> {
+        val ends = mutableListOf<Int>()
+        tokens.forEachIndexed { i, t ->
+            if (t.text.any { it in ".!?\u0964" }) ends.add(i)
+        }
+        return ends
+    }
+
+    private fun applyCase(word: String, caseCode: Int): String = when (caseCode) {
+        BinaryCodec.CaseCode.LOWER -> word.lowercase()
+        BinaryCodec.CaseCode.TITLE ->
+            word.lowercase().replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+        BinaryCodec.CaseCode.UPPER -> word.uppercase()
+        else -> word
     }
 
     fun decodeFromRepresentation(representation: CommonSpeechRepresentation): String {
