@@ -248,6 +248,44 @@ class PhaseComponentsTest {
         assertEquals(AdaptiveLinkGovernor.NORMAL_MAX_PAYLOAD, g.maxPayload())
     }
 
+    @Test
+    fun `governor loss fraction uses real traffic totals above the floor`() {
+        val g = AdaptiveLinkGovernor()
+        // 18 lost of 338 observed ≈ 5.3% -> stays NORMAL
+        repeat(20) {
+            g.observe(LinkMetrics(
+                packetLoss = 18,
+                packetsSent = 150,
+                packetsReceived = 170,
+                roundTripTimeMs = 40,
+                retransmissions = 0
+            ))
+        }
+        assertEquals(AdaptiveBandwidth.BandwidthMode.NORMAL, g.mode())
+        // 90 lost of 390 observed ≈ 23% -> degrades to LOW
+        repeat(20) {
+            g.observe(LinkMetrics(
+                packetLoss = 90,
+                packetsSent = 150,
+                packetsReceived = 150,
+                roundTripTimeMs = 40,
+                retransmissions = 0
+            ))
+        }
+        assertEquals(AdaptiveBandwidth.BandwidthMode.LOW_BANDWIDTH, g.mode())
+        // Same gross rate is bounded: 400 lost of 404 observed ≈ 99% -> EMERGENCY
+        repeat(20) {
+            g.observe(LinkMetrics(
+                packetLoss = 400,
+                packetsSent = 2,
+                packetsReceived = 2,
+                roundTripTimeMs = 40,
+                retransmissions = 0
+            ))
+        }
+        assertEquals(AdaptiveBandwidth.BandwidthMode.EMERGENCY, g.mode())
+    }
+
     // ------------------------------------------------------------------
     // NetworkSimulator
     // ------------------------------------------------------------------

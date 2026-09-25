@@ -32,13 +32,16 @@ class PresenceAwareTTS(
         delegate.initialize(context, language, onReady)
     }
 
-    override fun speak(text: String, utteranceId: String) {
+    override fun speak(text: String, utteranceId: String, onDone: (() -> Unit)?) {
         if (!knowsOfPresence()) {
             suppressedSpeeches++
             lastSuppressionReason = "no listener present"
+            // Nothing reached the speaker; complete immediately so the caller's
+            // latency bookkeeping does not block on a speech that never ran.
+            onDone?.invoke()
             return
         }
-        delegate.speak(text, utteranceId)
+        delegate.speak(text, utteranceId, onDone)
     }
 
     override fun stop() {

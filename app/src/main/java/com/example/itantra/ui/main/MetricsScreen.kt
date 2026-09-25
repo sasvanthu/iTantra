@@ -42,18 +42,22 @@ fun MetricsScreen(viewModel: MainViewModel) {
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Latency Section
+        fun ms(v: Long): String = if (v > 0) "$v ms" else "NOT MEASURED"
+        fun b(v: Int): String = "$v B"
+
+        // Latency Section — every row is either a real reading or an explicit
+        // NOT MEASURED; nothing is ever fabricated as a zero.
         MetricSection("LATENCY") {
-            MetricRow("STT:", "${metrics?.latency?.sttLatencyMs ?: 0} ms")
-            MetricRow("Encoding:", "${metrics?.latency?.encodingLatencyMs ?: 0} ms")
-            MetricRow("Packetization:", "${metrics?.latency?.packetizationLatencyMs ?: 0} ms")
-            MetricRow("Network send:", "${metrics?.latency?.transportLatencyMs ?: 0} ms")
-            MetricRow("Network receive:", "${metrics?.latency?.networkReceiveLatencyMs ?: 0} ms")
-            MetricRow("ACK latency:", "${metrics?.latency?.ackLatencyMs ?: 0} ms")
-            MetricRow("RTT:", "${metrics?.latency?.roundTripTimeMs ?: 0} ms", RetroAmber)
-            MetricRow("Decoding:", "${metrics?.latency?.decodingLatencyMs ?: 0} ms")
-            MetricRow("TTS:", "${metrics?.latency?.ttsLatencyMs ?: 0} ms")
-            MetricRow("Total:", "${metrics?.latency?.totalLatencyMs ?: 0} ms", RetroAmber)
+            MetricRow("STT:", ms((metrics?.latency?.sttLatencyMs ?: 0L)))
+            MetricRow("Encoding:", ms(metrics?.latency?.encodingLatencyMs ?: 0L))
+            MetricRow("Packetization:", ms(metrics?.latency?.packetizationLatencyMs ?: 0L))
+            MetricRow("Network send:", ms(metrics?.latency?.transportLatencyMs ?: 0L))
+            MetricRow("Network receive:", ms(metrics?.latency?.networkReceiveLatencyMs ?: 0L))
+            MetricRow("ACK latency:", ms(metrics?.latency?.ackLatencyMs ?: 0L))
+            MetricRow("RTT:", ms(metrics?.latency?.roundTripTimeMs ?: 0L), RetroAmber)
+            MetricRow("Decoding:", ms(metrics?.latency?.decodingLatencyMs ?: 0L))
+            MetricRow("TTS:", ms(metrics?.latency?.ttsLatencyMs ?: 0L))
+            MetricRow("End-to-end:", ms(metrics?.latency?.totalLatencyMs ?: 0L), RetroAmber)
         }
 
         Spacer(modifier = Modifier.height(12.dp))
@@ -95,6 +99,7 @@ fun MetricsScreen(viewModel: MainViewModel) {
                 MetricRow("Packets:", "${rep.packetCount}")
                 MetricRow("Retries:", "${rep.retransmissions}",
                     if (rep.retransmissions > 0) RetroAmber else RetroGreen)
+                MetricRow("STT:", if (rep.sttMeasured) "${rep.sttLatencyMs} ms" else "NOT MEASURED", RetroGray)
                 MetricRow("Result:", if (rep.failed) "FAILED" else "DELIVERED + ACK",
                     if (rep.failed) RetroRed else RetroGreen)
             }
@@ -107,6 +112,9 @@ fun MetricsScreen(viewModel: MainViewModel) {
             MetricRow("Memory Used:", "${String.format("%.1f", metrics?.system?.memoryUsageMB ?: 0f)} MB")
             MetricRow("Heap Used:", "${String.format("%.1f", metrics?.system?.heapUsedMB ?: 0f)} MB")
             MetricRow("Heap Max:", "${String.format("%.1f", metrics?.system?.heapMaxMB ?: 0f)} MB")
+            MetricRow("CPU:", "NOT MEASURED", RetroGray)
+            MetricRow("Throughput:", if ((metrics?.transport?.throughput ?: 0.0) > 0)
+                "${String.format("%.1f", metrics!!.transport.throughput)} B/s" else "NOT MEASURED", RetroGray)
         }
 
         Spacer(modifier = Modifier.height(12.dp))

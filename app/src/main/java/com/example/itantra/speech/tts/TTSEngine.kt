@@ -25,7 +25,11 @@ import java.util.Locale
  */
 interface TTSEngine {
     fun initialize(context: Context, language: Language, onReady: () -> Unit = {})
-    fun speak(text: String, utteranceId: String = System.currentTimeMillis().toString())
+    fun speak(
+        text: String,
+        utteranceId: String = System.currentTimeMillis().toString(),
+        onDone: (() -> Unit)? = null
+    )
     fun stop()
     fun isInitialized(): Boolean
     fun shutdown()
@@ -47,6 +51,9 @@ class AndroidTTSEngine : TTSEngine {
     private var initialized = false
     private var currentLanguage: Language = Language.ENGLISH
 
+    /** utteranceId -> completion callback, used to measure real synthesis time. */
+    private val pendingDone = java.util.concurrent.ConcurrentHashMap<String, () -> Unit>()
+
     override fun initialize(context: Context, language: Language, onReady: () -> Unit) {
         currentLanguage = language
         tts = TextToSpeech(context) { status ->
@@ -57,6 +64,19 @@ class AndroidTTSEngine : TTSEngine {
                     Log.w(TAG, "Language $language not supported, falling back to English")
                     tts?.setLanguage(Locale.US)
                 }
+                tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                    override fun onStart(utteranceId: String?) {}
+                    override fun onDone(utteranceId: String?) {
+                        utteranceId?.let { pendingDone.remove(it)?.invoke() }
+                    }
+                    override fun onError(utteranceId: String?) {
+                        utteranceId?.let { pendingDone.remove(it)?.invoke() }
+                    }
+                    @Deprecated("Deprecated in Java")
+                    override fun onError(utteranceId: String?, errorCode: Int) {
+                        utteranceId?.let { pendingDone.remove(it)?.invoke() }
+                    }
+                })
                 initialized = true
                 Log.i(TAG, "TTS initialized for $language")
                 onReady()
@@ -82,16 +102,32 @@ class AndroidTTSEngine : TTSEngine {
         }
     }
 
-    override fun speak(text: String, utteranceId: String) {
+    override fun speak(text: String, utteranceId: String, onDone: (() -> Unit)?) {
         if (!initialized) {
             Log.w(TAG, "TTS not initialized")
+            onDone?.invoke()
             return
+        }
+        if (onDone != null) {
+            pendingDone[utteranceId] = onDone
+            // Safety net: synthesize() must eventually resolve even if the
+            // engine never reports completion (e.g. focus lost mid-utterance).
+            Thread {
+                try {
+                    Thread.sleep(20_000)
+                    pendingDone.remove(utteranceId)?.invoke()
+                } catch (e: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                }
+            }.apply { isDaemon = true }.start()
         }
         tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
     }
 
     override fun stop() {
         tts?.stop()
+        pendingDone.values.forEach { it.invoke() }
+        pendingDone.clear()
     }
 
     override fun isInitialized(): Boolean = initialized

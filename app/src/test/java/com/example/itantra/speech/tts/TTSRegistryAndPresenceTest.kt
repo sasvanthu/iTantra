@@ -66,7 +66,7 @@ class RecordingTTSEngine : TTSEngine {
         onReady()
     }
 
-    override fun speak(text: String, utteranceId: String) {
+    override fun speak(text: String, utteranceId: String, onDone: (() -> Unit)?) {
         spoken.add(text to utteranceId)
     }
 

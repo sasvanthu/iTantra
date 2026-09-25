@@ -129,9 +129,21 @@ class MeshTransportEngine(
     private var lastGapsSeen = 0
     private var lastDroppedSeen = 0
 
+    /** Bandwidth governor: sizes flood packets from measured edge loss/RTT. */
+    private val governor = AdaptiveLinkGovernor()
+
+    /** Exactly one store-and-forward flush loop runs at a time (no double flood). */
+    private val flushRunning = java.util.concurrent.atomic.AtomicBoolean(false)
+
     init {
         meshScope.launch {
             storeForwardQueue.stats.collect { _storeForwardStats.value = it }
+        }
+        meshScope.launch {
+            while (true) {
+                kotlinx.coroutines.delay(1000)
+                governor.observe(_linkMetrics.value)
+            }
         }
     }
 
@@ -334,7 +346,7 @@ class MeshTransportEngine(
             messageId = messageId,
             priority = priority.toInt(),
             isEmergency = isEmergency,
-            maxPayload = Packetizer.DEFAULT_MAX_PAYLOAD
+            maxPayload = governor.maxPayload()
         )
 
         _messageInfo.value = MessageInfo(
@@ -361,6 +373,9 @@ class MeshTransportEngine(
         if (!completed) failed = true
 
         val latency = System.currentTimeMillis() - startMs
+        // Honest labeling: a broadcast has no addressed recipient to ACK, so
+        // "roundTripTimeMs" here is the one-way flood wall-clock time, and
+        // retransmissions is always 0 (edges retransmit on the hop, not the mesh).
         val result = SendResult(
             messageId = messageId,
             transmittedBytes = transmittedBytes,
@@ -401,22 +416,28 @@ class MeshTransportEngine(
     /**
      * Deliver retained store-and-forward messages once any edge is reachable.
      * Keeps a message queued if it cannot reach a live edge; CRITICAL traffic
-     * always drains first because the queue orders by priority.
+     * always drains first because the queue orders by priority. The atomic
+     * guard guarantees a single flush loop even when connectivity flaps.
      */
     private fun scheduleFlush() {
+        if (!flushRunning.compareAndSet(false, true)) return
         meshScope.launch {
-            while (isConnectedCount() > 0) {
-                val msg = storeForwardQueue.peekNext() ?: break
-                val result = transmitPrepared(
-                    messageId = messageIdCounter.getAndIncrement(),
-                    data = msg.data,
-                    language = msg.language,
-                    isEmergency = msg.isEmergency,
-                    priority = msg.priority,
-                    liveCount = isConnectedCount()
-                )
-                if (result.failed) break
-                storeForwardQueue.markForwarded(msg)
+            try {
+                while (isConnectedCount() > 0) {
+                    val msg = storeForwardQueue.peekNext() ?: break
+                    val result = transmitPrepared(
+                        messageId = messageIdCounter.getAndIncrement(),
+                        data = msg.data,
+                        language = msg.language,
+                        isEmergency = msg.isEmergency,
+                        priority = msg.priority,
+                        liveCount = isConnectedCount()
+                    )
+                    if (result.failed) break
+                    storeForwardQueue.markForwarded(msg)
+                }
+            } finally {
+                flushRunning.set(false)
             }
         }
     }

@@ -115,6 +115,12 @@ class MeshReassembler(
 
     private fun tryAssemble(buf: Buf, messageId: Long): MeshMessage? {
         if (buf.parts.isEmpty() && buf.expectedDataCount <= 0) return null
+        if (buf.expectedDataCount > MAX_DATA_PACKETS) {
+            // Hostile END guard: never allocate a multi-billion-element Set.
+            buffers.remove(messageId)
+            droppedMessages++
+            return null
+        }
         val expected = if (buf.expectedDataCount > 0) {
             (1..buf.expectedDataCount).toSet()
         } else {
@@ -183,5 +189,8 @@ class MeshReassembler(
 
     companion object {
         const val DEFAULT_RETENTION_MS: Long = 30_000L
+
+        /** Upper bound on packets in one mesh message (hostile END guard). */
+        const val MAX_DATA_PACKETS = 16_384
     }
 }

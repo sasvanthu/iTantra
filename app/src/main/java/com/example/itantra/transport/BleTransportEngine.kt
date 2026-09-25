@@ -1,6 +1,7 @@
 package com.example.itantra.transport
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
@@ -180,6 +181,14 @@ class BleTransportEngine(
 
     private fun hasPermission(permission: String): Boolean =
         ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+
+    /** BLUETOOTH_CONNECT (API 31+) or legacy BLUETOOTH — safe-gated at call sites. */
+    private fun hasConnectPermission(): Boolean =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            hasPermission(Manifest.permission.BLUETOOTH_CONNECT)
+        } else {
+            hasPermission(Manifest.permission.BLUETOOTH)
+        }
 
     private fun blePermissionsOk(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -455,8 +464,17 @@ class BleTransportEngine(
         leScanner = null
     }
 
+    // Guarded by hasConnectPermission(); lint cannot trace checks through the
+    // helper, so the annotation re-declares the runtime BLUETOOTH_CONNECT guard.
+    @SuppressLint("MissingPermission")
     private fun closeGattClient() {
         val g = gattClient ?: return
+        if (!hasConnectPermission()) {
+            gattClient = null
+            rxCharacteristic = null
+            txCharacteristic = null
+            return
+        }
         try {
             g.disconnect()
         } catch (e: SecurityException) {
@@ -472,8 +490,16 @@ class BleTransportEngine(
         txCharacteristic = null
     }
 
+    @SuppressLint("MissingPermission")
     private fun closeGattServer() {
         val s = gattServer ?: return
+        if (!hasConnectPermission()) {
+            gattServer = null
+            connectedDevice = null
+            rxCharacteristic = null
+            txCharacteristic = null
+            return
+        }
         try {
             s.clearServices()
         } catch (e: Exception) {
@@ -490,7 +516,9 @@ class BleTransportEngine(
         txCharacteristic = null
     }
 
-    override fun pollLocalAddress(): String = adapter?.name ?: ""
+    @SuppressLint("MissingPermission")
+    override fun pollLocalAddress(): String =
+        if (hasConnectPermission()) adapter?.name ?: "" else ""
 
     override fun getLinkName(): String {
         val name = pollLocalAddress()

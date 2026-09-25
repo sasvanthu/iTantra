@@ -54,7 +54,7 @@ class HardwareTestViewModel(application: Application) : AndroidViewModel(applica
         private val retroCodec = RetroSpeechCodec()
         private val NOOP_TTS = object : TTSEngine {
             override fun initialize(context: Context, language: Language, onReady: () -> Unit) = onReady()
-            override fun speak(text: String, utteranceId: String) {}
+            override fun speak(text: String, utteranceId: String, onDone: (() -> Unit)?) { onDone?.invoke() }
             override fun stop() {}
             override fun isInitialized(): Boolean = true
             override fun shutdown() {}

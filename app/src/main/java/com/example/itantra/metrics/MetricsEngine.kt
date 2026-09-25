@@ -166,6 +166,31 @@ class MetricsEngine {
         transportMetrics.sessionCount++
     }
 
+    /**
+     * Mirror the transport layer's own live session counters (packets, bytes,
+     * loss, retransmissions, duplicates, corruption) so the dashboard metrics
+     * reflect the real wire, not hard-coded placeholders.
+     */
+    fun syncTransport(
+        packetsSent: Int,
+        packetsReceived: Int,
+        retransmissions: Int,
+        packetLoss: Int,
+        transmittedBytes: Long,
+        receivedBytes: Long,
+        duplicatePackets: Int,
+        corruptedFrames: Int
+    ) {
+        transportMetrics.packetsSent = packetsSent
+        transportMetrics.packetsReceived = packetsReceived
+        transportMetrics.retransmissions = retransmissions
+        transportMetrics.packetLoss = packetLoss
+        transportMetrics.transmittedBytes = transmittedBytes
+        transportMetrics.receivedBytes = receivedBytes
+        transportMetrics.duplicatePackets = duplicatePackets
+        transportMetrics.corruptedFrames = corruptedFrames
+    }
+
     fun getSystemMetrics(): SystemMetrics {
         val runtime = Runtime.getRuntime()
         val usedMemory = (runtime.totalMemory() - runtime.freeMemory()).toFloat() / (1024f * 1024f)

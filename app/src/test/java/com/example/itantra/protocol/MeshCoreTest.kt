@@ -247,4 +247,23 @@ class MeshCoreTest {
         r.purgeStale(retentionMillis = 500) // firstReceivedAt (100) < cutoff (500)
         assertEquals(1, r.droppedMessages)
     }
+
+    @Test
+    fun `hostile end data count is dropped without allocating`() {
+        val r = MeshReassembler()
+        r.onPacket(Packet.createStartPacket(messageId = 99L, language = Language.ENGLISH))
+        // END announces 0x7FFFFFFF data packets — a naive (1..n).toSet() would
+        // try to allocate a multi-billion-element collection (OOM as an Error).
+        val hostileEnd = Packet(
+            messageId = 99L,
+            sequenceId = -1,
+            language = Language.ENGLISH,
+            packetType = PacketType.END,
+            payload = byteArrayOf(0x7F, 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte()),
+            crc = 0
+        )
+        assertNull(r.onPacket(hostileEnd))
+        assertEquals(1, r.droppedMessages)
+        assertEquals(0, r.snapshotSize())
+    }
 }

@@ -59,6 +59,13 @@ abstract class BaseTransportEngine(
         const val PROTOCOL_VERSION = 1
         const val HANDSHAKE_TIMEOUT_MS = 5_000L
         const val TRANSFER_TIMEOUT_MS = 30_000L
+
+        /** Upper bound on packets in one message (hostile END guard): 16 MiB @ 1 KiB. */
+        const val MAX_DATA_PACKETS = 16_384
+        /** Hold on a half-received message before it is dropped and counted. */
+        const val STALE_RECEIVE_RETENTION_MS = 30_000L
+        /** Bound for the delivered-message dedup set so memory stays flat. */
+        const val MAX_COMPLETED_MESSAGES = 512
     }
 
     protected val baseScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -492,6 +499,7 @@ abstract class BaseTransportEngine(
                 link { retransmissions++; packetsSent++ }
                 enqueueFrame(p)
             }
+            purgeStaleReceiveBuffers()
         }
     }
 
@@ -632,6 +640,13 @@ abstract class BaseTransportEngine(
         if (packet.priority == 3.toByte()) buf.isEmergency = true
 
         if (packet.packetType == PacketType.TEXT_DATA) {
+            // Hostile seq guard: a faked huge sequence would make the gap-NACK
+            // loop below try to request billions of missing packets.
+            if (packet.sequenceId <= 0 || packet.sequenceId > MAX_DATA_PACKETS) {
+                receiveBuffers.remove(messageId)
+                link { packetLoss++; corruptedFrames++ }
+                return
+            }
             val seq = packet.sequenceId
             if (buf.parts.containsKey(seq)) {
                 // Duplicate delivery: re-ACK, never re-process.
@@ -693,6 +708,14 @@ abstract class BaseTransportEngine(
         if (!buf.endSeen) return
         if (buf.parts.isEmpty() && buf.expectedDataCount <= 0) return
         val expected = if (buf.expectedDataCount > 0) {
+            // Hostile END guard: an implausible packet count must never trigger
+            // a multi-billion-element allocation (OOM is an Error the frame
+            // layer cannot catch). Drop the buffer and count the loss honestly.
+            if (buf.expectedDataCount > MAX_DATA_PACKETS) {
+                receiveBuffers.remove(messageId)
+                link { packetLoss++; corruptedFrames++ }
+                return
+            }
             (1..buf.expectedDataCount).toSet()
         } else {
             (1..buf.maxSeq).toSet()
@@ -745,6 +768,34 @@ abstract class BaseTransportEngine(
 
     private fun emitEvent(event: LinkMessageEvent) {
         baseScope.launch { _linkEvents.emit(event) }
+    }
+
+    /**
+     * Drop half-received messages that never completed within the retention
+     * window (a chatty or hostile peer can otherwise grow memory without bound).
+     * Dropped tails are counted as packet loss, never silently ignored.
+     */
+    private fun purgeStaleReceiveBuffers() {
+        if (receiveBuffers.isEmpty()) return
+        val cutoff = System.currentTimeMillis() - STALE_RECEIVE_RETENTION_MS
+        val it = receiveBuffers.entries.iterator()
+        var dropped = 0
+        while (it.hasNext()) {
+            val entry = it.next()
+            if (entry.value.firstReceivedAt < cutoff) {
+                it.remove()
+                dropped++
+            }
+        }
+        if (dropped > 0) link { packetLoss += dropped }
+
+        // Keep the delivered-message dedup set bounded (oldest pruned first).
+        if (completedMessages.size > MAX_COMPLETED_MESSAGES) {
+            val overflow = completedMessages.size - MAX_COMPLETED_MESSAGES
+            completedMessages.iterator().asSequence().take(overflow).forEach {
+                completedMessages.remove(it)
+            }
+        }
     }
 
     private fun setStatus(status: ConnectionStatus) {

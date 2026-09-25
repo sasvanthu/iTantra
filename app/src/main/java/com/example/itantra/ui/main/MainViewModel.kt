@@ -58,10 +58,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (raw < 0) 100 else raw.coerceAtMost(100)
     }
 
-    /** Phase 22: model presence probe — a file really on this device. */
+    /** Phase 22: model presence probe — a file really on this device. An STT
+     *  model counts as present exactly when VoskSTTEngine can load it: either an
+     *  unpacked dir at filesDir/models/<code>/ or a zip at filesDir/stt-<LANG>.zip.
+     *  No open-source TTS voices are bundled, so TTS entries are always absent. */
     private val modelProbe = ModelManager.ModelProbe { entry ->
-        File(app.filesDir, entry.id).exists()
+        when (entry.kind) {
+            ModelManager.ModelKind.STT ->
+                File(app.filesDir, "${entry.id}.zip").isFile ||
+                    File(app.filesDir, "models/${modelDirCode(entry.language)}").isDirectory
+            ModelManager.ModelKind.TTS -> false
+        }
     }
+
+    private fun modelDirCode(language: Language): String =
+        when (language) {
+            Language.ENGLISH -> "en"
+            Language.HINDI -> "hi"
+            Language.TAMIL -> "ta"
+            Language.BENGALI -> "bn"
+            Language.TELUGU -> "te"
+            Language.MARATHI -> "mr"
+            Language.GUJARATI -> "gu"
+            Language.KANNADA -> "kn"
+            Language.MALAYALAM -> "ml"
+            Language.ODIA -> "or"
+            Language.UNKNOWN -> "xx"
+        }
 
     private val networkSimulator = NetworkSimulator()
     private val wifiTransport = WifiTransportEngine(networkSimulator)
@@ -88,11 +111,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _manualText = MutableStateFlow("")
     val manualText: StateFlow<String> = _manualText
 
+    private val _modelStatus = MutableStateFlow(ModelManager.resolve(modelProbe))
+    val modelStatus: StateFlow<List<ModelManager.Resolution>> = _modelStatus
+
+    private val _packetActivity = MutableStateFlow<List<PacketActivity>>(emptyList())
+    val packetActivity: StateFlow<List<PacketActivity>> = _packetActivity.asStateFlow()
+
     data class ReceivedMessageUI(
         val text: String,
         val language: Language,
         val timestamp: Long,
         val isEmergency: Boolean
+    )
+
+    enum class ActivityKind { TX, RX, LINK, ALERT }
+
+    /** One real transport-layer event, kept for the live packet lane. */
+    data class PacketActivity(
+        val kind: ActivityKind,
+        val label: String,
+        val detail: String
     )
 
     data class UIState(
@@ -112,6 +150,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         val isRecording: Boolean = false,
         val isProcessing: Boolean = false,
+        val isPlaying: Boolean = false,
         val currentLanguage: Language = Language.ENGLISH,
         val mode: String = "RETRO",
         val lastSentText: String = "",
@@ -181,6 +220,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun refreshSystemStatus() {
         val resolutions = ModelManager.resolve(modelProbe)
+        _modelStatus.value = resolutions
         _uiState.update {
             it.copy(
                 batteryPercentRaw = batteryPercent(),
@@ -225,8 +265,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * A CRITICAL message arrived over the air: mirror the operator-triggered
+     * emergency latch so the receiving device switches into alert mode and
+     * surfaces the incoming SOS prominently.
+     */
+    fun raiseEmergencyFromPeer(text: String) {
+        if (emergencyController.isActive) return
+        emergencyController.raise("incoming emergency: $text")
+        opController.switchTo(OperationMode.EMERGENCY, "emergency received")
+        _uiState.update {
+            it.copy(
+                emergencyActive = emergencyController.isActive,
+                emergencyReason = emergencyController.currentReason,
+                opMode = opController.mode,
+                opModeHistory = opController.history.takeLast(6)
+                    .map { t -> "${t.from} -> ${t.to} (${t.cause})" }
+            )
+        }
+    }
+
     fun acknowledgeEmergency() {
-        val acked = emergencyController.acknowledge("operator")
+        emergencyController.acknowledge("operator")
         opController.acknowledgeEmergency("operator")
         _uiState.update {
             it.copy(
@@ -293,7 +353,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             ttsEngine = presenceAwareTTS,
             speechCodec = currentCodec(),
             transport = engine,
-            metricsEngine = app.metricsEngine
+            metricsEngine = app.metricsEngine,
+            lowPowerController = lowPowerController
         )
         speechPipeline?.loopbackHandler = { text, lang -> currentCodec().performLab(text, lang) }
         speechPipeline?.setLanguage(_uiState.value.currentLanguage)
@@ -305,6 +366,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update {
                     it.copy(
                         isProcessing = ps.isProcessing,
+                        isPlaying = ps.isPlaying,
                         lastSentText = ps.lastSentText,
                         lastReceivedText = if (ps.lastReceivedText.isNotEmpty()) ps.lastReceivedText else it.lastReceivedText,
                         speechLoopback = ps.lastLoopback,
@@ -329,6 +391,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             isEmergency = msg.isEmergency
                         )).takeLast(20)
                     )
+                }
+                // A CRITICAL message received over the air is not just text:
+                // latch the emergency mode and surface the alert immediately.
+                if (msg.isEmergency) {
+                    raiseEmergencyFromPeer(msg.text)
                 }
             }
         }
@@ -379,16 +446,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private suspend fun observeLinkMetrics(engine: TransportEngine) {
-        engine.linkMetrics.collect { m ->
-            _uiState.update {
-                it.copy(
-                    linkMetrics = m,
-                    packetCount = Pair(m.packetsSent, m.packetsReceived)
-                )
-            }
+private suspend fun observeLinkMetrics(engine: TransportEngine) {
+    engine.linkMetrics.collect { m ->
+        // Mirror the transport layer's live counters into the metrics engine so
+        // the dashboard reports the real wire numbers (packets/bytes/loss/dups).
+        app.metricsEngine.syncTransport(
+            packetsSent = m.packetsSent,
+            packetsReceived = m.packetsReceived,
+            retransmissions = m.retransmissions,
+            packetLoss = m.packetLoss,
+            transmittedBytes = m.transmittedBytes,
+            receivedBytes = m.receivedBytes,
+            duplicatePackets = m.duplicatePackets,
+            corruptedFrames = m.corruptedFrames
+        )
+        if (m.roundTripTimeMs > 0) app.metricsEngine.recordRoundTripTime(m.roundTripTimeMs)
+        _uiState.update {
+            it.copy(
+                linkMetrics = m,
+                packetCount = Pair(m.packetsSent, m.packetsReceived)
+            )
         }
     }
+}
 
     private suspend fun observeMessageInfo(engine: TransportEngine) {
         engine.messageInfo.collect { m ->
@@ -407,17 +487,46 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             ipAddress = engine.getLocalAddress()
                         )
                     }
+                    pushActivity(ActivityKind.LINK, "LINK UP",
+                        "${ev.session.sessionId} vs ${ev.session.protocolVersion} · epoch ${ev.session.epoch}")
                 }
                 is LinkMessageEvent.Disconnected -> {
                     _uiState.update {
                         it.copy(linkError = ev.reason, linkStatusLine = "LINK CLOSED: ${ev.reason}")
                     }
+                    pushActivity(ActivityKind.LINK, "LINK DOWN", ev.reason)
                 }
-                is LinkMessageEvent.Transmitted -> { /* surfaced through messageInfo */ }
-                is LinkMessageEvent.Received -> { /* surfaced through pipeline */ }
+                is LinkMessageEvent.Transmitted -> {
+                    pushActivity(
+                        if (ev.failed) ActivityKind.ALERT else ActivityKind.TX,
+                        "TX #${ev.messageId}",
+                        buildString {
+                            append("${ev.packetCount} pkts · ${ev.transmittedBytes} B")
+                            if (ev.retransmissions > 0) append(" · ${ev.retransmissions} retr")
+                            if (ev.roundTripTimeMs > 0) append(" · ${ev.roundTripTimeMs} ms")
+                            if (ev.failed) append(" · FAILED")
+                        }
+                    )
+                }
+                is LinkMessageEvent.Received -> {
+                    pushActivity(
+                        if (ev.isEmergency) ActivityKind.ALERT else ActivityKind.RX,
+                        "RX #${ev.messageId}",
+                        buildString {
+                            append("${ev.dataPackets} pkts · ${ev.payloadBytes} B")
+                            if (ev.isEmergency) append(" · EMERGENCY")
+                        }
+                    )
+                }
                 is LinkMessageEvent.StatusChange -> { /* handled in observeStatus */ }
             }
         }
+    }
+
+    /** Bounded, real-event-only console feed for the packet lane. */
+    private fun pushActivity(kind: ActivityKind, label: String, detail: String) {
+        val entry = PacketActivity(kind, label, detail)
+        _packetActivity.update { (listOf(entry) + it).takeLast(40) }
     }
 
     // ------------------------------------------------------------------
@@ -604,6 +713,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setActiveTab(tab: Int) {
         _uiState.value = _uiState.value.copy(activeTab = tab)
+        if (tab == 5) refreshSystemStatus()
+        if (tab == 6) refreshSystemStatus()
     }
 
     // ------------------------------------------------------------------

@@ -3,6 +3,7 @@ package com.example.itantra
 import android.content.Context
 import com.example.itantra.codec.*
 import com.example.itantra.metrics.MetricsEngine
+import com.example.itantra.ops.LowPowerController
 import com.example.itantra.protocol.Packetizer
 import com.example.itantra.speech.stt.STTEngine
 import com.example.itantra.speech.stt.SimulatedSTTEngine
@@ -20,11 +21,13 @@ class SpeechPipeline(
     private val ttsEngine: TTSEngine,
     private val speechCodec: SpeechCodec,
     private val transport: TransportEngine,
-    private val metricsEngine: MetricsEngine
+    private val metricsEngine: MetricsEngine,
+    private val lowPowerController: LowPowerController? = null
 ) {
 
     companion object {
         private const val TAG = "SpeechPipeline"
+        private const val TTS_UTTERANCE_TIMEOUT_MS = 20_000L
     }
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -83,6 +86,7 @@ class SpeechPipeline(
         val retransmissions: Int,
         val roundTripTimeMs: Long,
         val sttLatencyMs: Long,
+        val sttMeasured: Boolean,
         val encodeLatencyMs: Long,
         val packetizeLatencyMs: Long,
         val networkLatencyMs: Long,
@@ -148,8 +152,13 @@ class SpeechPipeline(
 
         _pipelineState.value = _pipelineState.value.copy(isProcessing = true)
         val totalStart = System.currentTimeMillis()
-        val sttLatencyMs = System.currentTimeMillis() - recordingStartTime
-        metricsEngine.recordSTTLatency(sttLatencyMs.toLong())
+        // Honest STT latency: only a send that follows an actual recording session
+        // can report transcription cost. Manual SEND / EMERGENCY with no captured
+        // speech must NOT re-hash the process lifetime into a bogus millisecond
+        // figure; those sends report sttMeasured = false.
+        val sttMeasured = recordingStartTime > 0L
+        val sttLatencyMs = if (sttMeasured) System.currentTimeMillis() - recordingStartTime else 0L
+        if (sttMeasured) metricsEngine.recordSTTLatency(sttLatencyMs)
 
         val connected = transport.isConnected()
         val isEmergency = forceEmergency
@@ -181,6 +190,38 @@ class SpeechPipeline(
         metricsEngine.recordTotalPacketBytes(packetBytes)
 
         val report: SpeechSendReport = if (connected) {
+            // Low-power governor gating: at LOW the last battery is reserved for
+            // NORMAL+ traffic, at CRITICAL only CRITICAL/emergency may transmit.
+            // A deferred message is reported honestly — nothing goes on the wire,
+            // and no success is claimed.
+            if (lowPowerController?.canTransmit(encoded.importance) == false) {
+                val deferred = SpeechSendReport(
+                    text = text,
+                    language = language,
+                    originalUtf8Bytes = encoded.originalUtf8Size,
+                    encodedBytes = encoded.finalEncodedSize,
+                    packetCount = 0,
+                    transmittedBytes = 0,
+                    retransmissions = 0,
+                    roundTripTimeMs = 0,
+                    sttLatencyMs = sttLatencyMs,
+                    sttMeasured = sttMeasured,
+                    encodeLatencyMs = encodeMs,
+                    packetizeLatencyMs = packetizeMs,
+                    networkLatencyMs = 0,
+                    totalLatencyMs = System.currentTimeMillis() - totalStart,
+                    compressionPercentage = encoded.compressionPercentage,
+                    isEmergency = effectiveEmergency,
+                    failed = true,
+                    detail = "deferred by power governor (${lowPowerController.profile.name})",
+                    overNetwork = true
+                )
+                _pipelineState.value = _pipelineState.value.copy(
+                    isProcessing = false,
+                    lastSendReport = deferred
+                )
+                return deferred
+            }
             val networkStart = System.currentTimeMillis()
             val result: SendResult? = transport.send(
                 data = encoded.data,
@@ -190,7 +231,6 @@ class SpeechPipeline(
             )
             val networkLatencyMs = System.currentTimeMillis() - networkStart
             metricsEngine.recordTransportLatency(networkLatencyMs)
-            metricsEngine.recordNetworkReceiveLatency(0)
             metricsEngine.recordAckLatency(result?.roundTripTimeMs ?: 0)
 
             SpeechSendReport(
@@ -203,6 +243,7 @@ class SpeechPipeline(
                 retransmissions = result?.retransmissions ?: 0,
                 roundTripTimeMs = result?.roundTripTimeMs ?: 0,
                 sttLatencyMs = sttLatencyMs,
+                sttMeasured = sttMeasured,
                 encodeLatencyMs = encodeMs,
                 packetizeLatencyMs = packetizeMs,
                 networkLatencyMs = networkLatencyMs,
@@ -228,6 +269,7 @@ class SpeechPipeline(
                 retransmissions = 0,
                 roundTripTimeMs = 0,
                 sttLatencyMs = sttLatencyMs,
+                sttMeasured = sttMeasured,
                 encodeLatencyMs = encodeMs,
                 packetizeLatencyMs = packetizeMs,
                 networkLatencyMs = 0,
@@ -282,15 +324,37 @@ class SpeechPipeline(
                         isEmergency = payload.isEmergency
                     )
                 )
-                _pipelineState.value = _pipelineState.value.copy(
-                    lastReceivedText = text,
-                    isPlaying = false
-                )
+                _pipelineState.value = _pipelineState.value.copy(lastReceivedText = text)
+
+                // Speak the received message (the injected engine applies its
+                // own presence/emergency gating). Synthesis time is measured.
+                speakReceived(text, payload.messageId, payload.isEmergency)
             }
         }
+        _pipelineState.value = _pipelineState.value.copy(isPlaying = false)
 
         val total = System.currentTimeMillis() - start
         metricsEngine.recordTotalLatency(total)
+    }
+
+    /**
+     * Play the received text through the offline TTS engine and record the
+     * real synthesis latency (bounded so a missing/failed engine never blocks
+     * the receive path).
+     */
+    private suspend fun speakReceived(text: String, messageId: Long, isEmergency: Boolean) {
+        if (!ttsEngine.isInitialized()) return
+        _pipelineState.value = _pipelineState.value.copy(isPlaying = true)
+        val started = System.currentTimeMillis()
+        val done = CompletableDeferred<Unit>()
+        ttsEngine.speak(
+            text = text,
+            utteranceId = "recv-$messageId-${System.nanoTime()}",
+            onDone = { done.complete(Unit) }
+        )
+        withTimeoutOrNull(TTS_UTTERANCE_TIMEOUT_MS) { done.await() }
+        metricsEngine.recordTTSLatency(System.currentTimeMillis() - started)
+        _pipelineState.value = _pipelineState.value.copy(isPlaying = false)
     }
 
     fun shutdown() {

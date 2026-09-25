@@ -24,6 +24,8 @@ fun MainScreen(viewModel: MainViewModel) {
                 2 -> CodecLabScreen(viewModel)
                 3 -> SettingsScreen(viewModel)
                 4 -> HardwareTestScreen()
+                5 -> ModelCenterScreen(viewModel)
+                6 -> DemoModeScreen(viewModel)
                 else -> CommunicationScreen(viewModel)
             }
         }
