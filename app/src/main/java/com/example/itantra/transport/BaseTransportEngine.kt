@@ -109,7 +109,9 @@ abstract class BaseTransportEngine(
 
     private var isHost = false
     private var sessionEpoch = 0
-    @Volatile private var lastError: String? = null
+    @Volatile private var _lastError: String? = null
+    @Volatile private var _lastPacketSummaryText: String = "NONE"
+    @Volatile private var _lastCrcStatus: Boolean? = null
 
     private var outboundFrames = PriorityFrameQueue()
     private var incomingChunks = Channel<ByteArray>(Channel.BUFFERED)
@@ -194,36 +196,56 @@ abstract class BaseTransportEngine(
     // ------------------------------------------------------------------
 
     override suspend fun startHost(port: Int): Boolean {
+        if (_connectionStatus.value == ConnectionStatus.CONNECTED ||
+            _connectionStatus.value == ConnectionStatus.CONNECTING ||
+            _connectionStatus.value == ConnectionStatus.DISCOVERING ||
+            _connectionStatus.value == ConnectionStatus.HANDSHAKING ||
+            _connectionStatus.value == ConnectionStatus.WAITING) {
+            setEngineError("Already connected, hosting, or connecting")
+            return false
+        }
         finishSession("restart")
         prepareSession(true)
         setStatus(ConnectionStatus.WAITING)
         return if (openLinkAsHost(port)) {
             establishLink()
         } else {
-            failLink("could not listen on port $port")
+            val err = _lastError ?: "could not listen on port $port"
+            failLink(err)
             finishSession("host failed")
             false
         }
     }
 
     override suspend fun connect(host: String, port: Int): Boolean {
+        if (_connectionStatus.value == ConnectionStatus.CONNECTED ||
+            _connectionStatus.value == ConnectionStatus.CONNECTING ||
+            _connectionStatus.value == ConnectionStatus.DISCOVERING ||
+            _connectionStatus.value == ConnectionStatus.HANDSHAKING) {
+            setEngineError("Already connected or connecting")
+            return false
+        }
         finishSession("restart")
         prepareSession(false)
         setStatus(ConnectionStatus.CONNECTING)
         return if (openLinkAsClient(host, port)) {
             establishLink()
         } else {
-            failLink("connection to $host:$port failed")
+            val err = _lastError ?: "connection to $host:$port failed"
+            failLink(err)
             finishSession("connect failed")
             false
         }
     }
 
     override suspend fun disconnect() {
+        _lastError = null
         finishSession("local disconnect")
+        setStatus(ConnectionStatus.DISCONNECTED)
     }
 
     private fun prepareSession(host: Boolean) {
+        _lastError = null
         isHost = host
         sessionEpoch = (epochCounter.getAndIncrement() and 0xFF).toInt()
         activeSends.clear()
@@ -238,6 +260,8 @@ abstract class BaseTransportEngine(
         governor.reset()
         _bandwidthMode.value = com.example.itantra.data.AdaptiveBandwidth.BandwidthMode.NORMAL
         completedMessages.clear()
+        _lastPacketSummaryText = "NONE"
+        _lastCrcStatus = null
 
         sessionJob = Job()
         sessionJob?.let { job ->
@@ -249,7 +273,7 @@ abstract class BaseTransportEngine(
     }
 
     private suspend fun establishLink(): Boolean {
-        setStatus(ConnectionStatus.CONNECTING)
+        setStatus(ConnectionStatus.HANDSHAKING)
 
         val deferred = CompletableDeferred<ConnectionSession>()
         handshakeDeferred = deferred
@@ -257,9 +281,13 @@ abstract class BaseTransportEngine(
         // Announce ourselves (peer answers symmetrically).
         sendCapability(PacketType.CAPABILITY)
 
-        val established = withTimeoutOrNull(HANDSHAKE_TIMEOUT_MS) { deferred.await() }
+        val established = try {
+            withTimeoutOrNull(HANDSHAKE_TIMEOUT_MS) { deferred.await() }
+        } catch (_: kotlinx.coroutines.CancellationException) {
+            null
+        }
         if (established == null) {
-            failLink("handshake timed out")
+            failLink(_lastError ?: "handshake timed out")
             finishSession("handshake failed")
             return false
         }
@@ -299,7 +327,7 @@ abstract class BaseTransportEngine(
 
         retransmissionManager.clear()
 
-        val reasonDetail = lastError?.let { " ($it)" } ?: ""
+        val reasonDetail = _lastError?.let { " ($it)" } ?: ""
         for (tracker in activeSends.values) {
             tracker.completeAbandoned("link closed$reasonDetail")
         }
@@ -307,11 +335,14 @@ abstract class BaseTransportEngine(
         receiveBuffers.clear()
         completedMessages.clear()
 
+        val wasError = _connectionStatus.value == ConnectionStatus.ERROR
         _session.value = null
         _linkMetrics.value = LinkMetrics()
         _messageInfo.value = MessageInfo()
-        lastError = null
-        setStatus(ConnectionStatus.DISCONNECTED)
+        if (!wasError) {
+            _lastError = null
+            setStatus(ConnectionStatus.DISCONNECTED)
+        }
 
         if (hadSession) {
             emitEvent(LinkMessageEvent.Disconnected(reason))
@@ -329,9 +360,19 @@ abstract class BaseTransportEngine(
 
     override fun getLocalAddress(): String = pollLocalAddress()
 
+    override fun getLastError(): String? = _lastError
+
+    override fun getLastPacketSummary(): String = _lastPacketSummaryText
+
+    override fun getLastCrcStatus(): Boolean? = _lastCrcStatus
+
+    fun setEngineError(reason: String) {
+        _lastError = reason
+    }
+
     /** Record the failure reason and surface an ERROR status to the UI. */
-    private fun failLink(reason: String) {
-        lastError = reason
+    protected fun failLink(reason: String) {
+        _lastError = reason
         setStatus(ConnectionStatus.ERROR)
     }
 
@@ -444,6 +485,7 @@ abstract class BaseTransportEngine(
     private suspend fun enqueueFrame(packet: Packet) {
         val frame = FrameWriter.write(sessionEpoch, packet.serialize())
         val size = frame.size
+        _lastPacketSummaryText = "TX #${packet.messageId} ${packet.packetType} (${size}B)"
         link { transmittedBytes += size }
         val tracker = activeSends[packet.messageId]
         if (tracker != null) synchronized(tracker) { tracker.transmittedBytes += size }
@@ -511,12 +553,18 @@ abstract class BaseTransportEngine(
         if (frame.epoch != sessionEpoch) {
             // Stale frame from an old session: drop silently.
             link { corruptedFrames++ }
+            _lastCrcStatus = false
+            _lastPacketSummaryText = "RX REJECTED (stale epoch ${frame.epoch})"
             return
         }
         val packet = Packet.deserialize(frame.bytes) ?: run {
             link { corruptedFrames++; packetLoss++ }
+            _lastCrcStatus = false
+            _lastPacketSummaryText = "RX CORRUPT (${frame.bytes.size}B)"
             return
         }
+        _lastCrcStatus = true
+        _lastPacketSummaryText = "RX #${packet.messageId} ${packet.packetType} (${frame.bytes.size}B)"
 
         when (packet.packetType) {
             PacketType.CAPABILITY, PacketType.CAPABILITY_ACK -> handleCapability(packet)
@@ -541,6 +589,8 @@ abstract class BaseTransportEngine(
         }
         if (capability.protocolVersion != PROTOCOL_VERSION) {
             failLink("incompatible protocol v${capability.protocolVersion}")
+            handshakeDeferred?.cancel()
+            handshakeDeferred = null
             baseScope.launch { finishSession("handshake rejected") }
             return
         }
@@ -798,7 +848,7 @@ abstract class BaseTransportEngine(
         }
     }
 
-    private fun setStatus(status: ConnectionStatus) {
+    protected fun setStatus(status: ConnectionStatus) {
         _connectionStatus.value = status
         emitEvent(LinkMessageEvent.StatusChange(status))
     }

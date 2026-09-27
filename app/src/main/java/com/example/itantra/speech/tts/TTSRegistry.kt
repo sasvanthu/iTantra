@@ -34,7 +34,10 @@ object TTSRegistry {
         OPEN_SOURCE_PIPER,
 
         /** RHVoice — open-source TTS for Indian languages. */
-        OPEN_SOURCE_RHVoice
+        OPEN_SOURCE_RHVoice,
+
+        /** Embedded Open-Source C/C++ NDK wrapper (Piper/eSpeak ABI) & standalone formant synthesizer. */
+        OPEN_SOURCE_EMBEDDED
     }
 
     enum class VoiceCapability {
@@ -114,8 +117,20 @@ object TTSRegistry {
         return dev to true
     }
 
+    val embeddedEngine: CatalogEngine = CatalogEngine(
+        name = "Embedded Open-Source TTS",
+        kind = EngineKind.OPEN_SOURCE_EMBEDDED,
+        description = "Embedded C/C++ NDK wrapper (Piper/eSpeak ABI) with standalone formant audio synthesis. 100% offline open-source compliance for non-Google hardware.",
+        languages = RECOGNIZED_LANGUAGES.associateWith { VoiceCapability.BUNDLED }
+    )
+
+    fun createEngine(preferOpenSource: Boolean = true): TTSEngine =
+        if (preferOpenSource) EmbeddedOpenSourceTTS(fallbackEngine = AndroidTTSEngine())
+        else AndroidTTSEngine()
+
     private fun EngineKind.isOpenSource(): Boolean =
         this == EngineKind.OPEN_SOURCE_ESPEAK ||
             this == EngineKind.OPEN_SOURCE_PIPER ||
-            this == EngineKind.OPEN_SOURCE_RHVoice
+            this == EngineKind.OPEN_SOURCE_RHVoice ||
+            this == EngineKind.OPEN_SOURCE_EMBEDDED
 }

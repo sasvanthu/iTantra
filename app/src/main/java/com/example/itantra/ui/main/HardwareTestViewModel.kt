@@ -13,6 +13,7 @@ import com.example.itantra.codec.BinaryCodec
 import com.example.itantra.codec.Language
 import com.example.itantra.codec.RetroSpeechCodec
 import com.example.itantra.lab.*
+import com.example.itantra.speech.stt.HybridSTTEngine
 import com.example.itantra.speech.stt.VoskSTTEngine
 import com.example.itantra.speech.tts.TTSEngine
 import com.example.itantra.transport.*
@@ -69,7 +70,7 @@ class HardwareTestViewModel(application: Application) : AndroidViewModel(applica
         val transport: LabRadio = LabRadio.BLE,
         val role: LabRole = LabRole.HOST,
         val address: String = "",
-        val port: String = "9876",
+        val port: String = "8888",
         val connectionStatus: ConnectionStatus = ConnectionStatus.DISCONNECTED,
         val sessionLabel: String = "",
         val bleCheck: BleLinkCheck = BleLinkCheck(),
@@ -99,7 +100,24 @@ class HardwareTestViewModel(application: Application) : AndroidViewModel(applica
 
         val reportRows: Int = 0,
         val reportText: String = "",
-        val reportSavedPath: String = ""
+        val reportSavedPath: String = "",
+
+        val diagnostics: ConnectionDiagnostics = ConnectionDiagnostics()
+    )
+
+    data class ConnectionDiagnostics(
+        val wifiServer: String = "STOPPED",
+        val wifiClient: String = "DISCONNECTED",
+        val wifiHandshake: String = "—",
+        val bleAdvertising: String = "OFF",
+        val bleScanning: String = "OFF",
+        val bleGatt: String = "DISCONNECTED",
+        val bleNotifications: String = "DISABLED",
+        val bleHandshake: String = "—",
+        val protocolVersion: String = "v1",
+        val protocolCrc: String = "—",
+        val lastPacket: String = "NONE",
+        val lastError: String = "NONE"
     )
 
     data class ReceivedItem(
@@ -149,7 +167,66 @@ class HardwareTestViewModel(application: Application) : AndroidViewModel(applica
                 }
             }
         }
+        viewModelScope.launch {
+            while (true) {
+                refreshDiagnostics()
+                delay(300)
+            }
+        }
         rebootReport()
+    }
+
+    private fun refreshDiagnostics() {
+        val wifi = labWifi
+        val ble = labBle
+        val active = activeEngine()
+
+        val wifiServer = if (wifi.isServerListening) "READY" else "STOPPED"
+        val wifiClient = if (wifi.isConnected()) "CONNECTED" else "DISCONNECTED"
+        val wifiHandshake = when {
+            wifi.session.value != null -> "PASS"
+            wifi.connectionStatus.value == ConnectionStatus.ERROR -> "FAIL"
+            else -> "—"
+        }
+
+        val bleCheck = ble.bleCheck.value
+        val bleAdvertising = if (bleCheck.advertising) "ON" else "OFF"
+        val bleScanning = if (bleCheck.scanning) "ON" else "OFF"
+        val bleGatt = if (bleCheck.connected) "CONNECTED" else "DISCONNECTED"
+        val bleNotifications = if (bleCheck.notificationsEnabled) "ENABLED" else "DISABLED"
+        val bleHandshake = when {
+            ble.session.value != null -> "PASS"
+            ble.connectionStatus.value == ConnectionStatus.ERROR -> "FAIL"
+            else -> "—"
+        }
+
+        val protoVer = "v${active.session.value?.protocolVersion ?: 1}"
+        val crcStatus = when (active.getLastCrcStatus()) {
+            true -> "PASS"
+            false -> "FAIL"
+            null -> "—"
+        }
+        val lastPkt = active.getLastPacketSummary()
+        val lastErr = active.getLastError() ?: (_state.value.error ?: "NONE")
+
+        _state.update {
+            it.copy(
+                diagnostics = ConnectionDiagnostics(
+                    wifiServer = wifiServer,
+                    wifiClient = wifiClient,
+                    wifiHandshake = wifiHandshake,
+                    bleAdvertising = bleAdvertising,
+                    bleScanning = bleScanning,
+                    bleGatt = bleGatt,
+                    bleNotifications = bleNotifications,
+                    bleHandshake = bleHandshake,
+                    protocolVersion = protoVer,
+                    protocolCrc = crcStatus,
+                    lastPacket = lastPkt,
+                    lastError = lastErr
+                )
+            )
+        }
     }
 
     private fun deviceReport(): DeviceReport {
@@ -493,7 +570,7 @@ class HardwareTestViewModel(application: Application) : AndroidViewModel(applica
         val engine = activeEngine()
         val pipeline = SpeechPipeline(
             context = app,
-            sttEngine = VoskSTTEngine(),
+            sttEngine = HybridSTTEngine(),
             ttsEngine = NOOP_TTS,
             speechCodec = retroCodec,
             transport = engine,

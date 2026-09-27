@@ -5,7 +5,11 @@ import com.example.itantra.codec.Language
 enum class ConnectionStatus {
     DISCONNECTED,
     CONNECTING,
-    /** Server (host) socket is open, waiting for a peer to connect. */
+    /** Discovering peers or scanning over the medium. */
+    DISCOVERING,
+    /** Capability exchange and session setup in progress. */
+    HANDSHAKING,
+    /** Server (host) socket or advertiser is open, waiting for a peer to connect. */
     WAITING,
     CONNECTED,
     ERROR

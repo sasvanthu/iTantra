@@ -62,7 +62,9 @@ class SpeechPipeline(
         val lastLoopback: CodecLabResult? = null,
         val lastSendReport: SpeechSendReport? = null,
         val language: Language = Language.ENGLISH,
-        val mode: String = "RETRO"
+        val mode: String = "RETRO",
+        val inputDurationMs: Long = 0L,
+        val ttsLatencyMs: Long = 0L
     )
 
     data class IncomingMessage(
@@ -109,26 +111,35 @@ class SpeechPipeline(
         isPTTMode = enabled
     }
 
-    fun startListening() {
-        if (isRecording) return
+    fun startListening(): Boolean {
+        if (isRecording) return true
+        if (!sttEngine.isInitialized()) {
+            android.util.Log.e(TAG, "[STT] [ERROR] STT engine not initialized, cannot start listening")
+            return false
+        }
         isRecording = true
         recordingStartTime = System.currentTimeMillis()
         currentText = ""
         _pipelineState.value = _pipelineState.value.copy(isRecording = true)
+        android.util.Log.i(TAG, "[VOICE] startListening() initiated, isPTTMode=$isPTTMode, lang=$currentLanguage")
 
         sttEngine.startListening { text ->
             currentText = text
+            android.util.Log.i(TAG, "[STT] Captured recognized utterance: \"$text\"")
             if (!isPTTMode) {
                 launchSend(text)
             }
         }
+        return true
     }
 
     fun stopListening() {
         if (!isRecording) return
         isRecording = false
+        val duration = if (recordingStartTime > 0L) System.currentTimeMillis() - recordingStartTime else 0L
+        android.util.Log.i(TAG, "[VOICE] stopListening() called. Final captured text: \"$currentText\" (duration=${duration}ms)")
         sttEngine.stopListening()
-        _pipelineState.value = _pipelineState.value.copy(isRecording = false)
+        _pipelineState.value = _pipelineState.value.copy(isRecording = false, inputDurationMs = duration)
 
         if (isPTTMode && currentText.isNotBlank()) {
             launchSend(currentText)
@@ -169,6 +180,8 @@ class SpeechPipeline(
         metricsEngine.recordEncodingLatency(encodeMs)
 
         val effectiveEmergency = isEmergency || encoded.importance == Importance.CRITICAL
+        android.util.Log.i(TAG, "[TEXT] Sending text: \"$text\" (lang=$language, emergency=$effectiveEmergency, importance=${encoded.importance})")
+        android.util.Log.i(TAG, "[CODEC] Encoded ${encoded.originalUtf8Size}B UTF-8 -> ${encoded.finalEncodedSize}B binary (${String.format("%.1f", encoded.compressionPercentage)}% ratio) in ${encodeMs}ms")
         metricsEngine.recordSizeMetrics(
             originalUtf8 = text.toByteArray(Charsets.UTF_8).size,
             tokenEncoded = encoded.tokenEncodedSize,
@@ -188,8 +201,10 @@ class SpeechPipeline(
         metricsEngine.recordPacketizationLatency(packetizeMs)
         val packetBytes = packets.sumOf { it.serialize().size }
         metricsEngine.recordTotalPacketBytes(packetBytes)
+        android.util.Log.i(TAG, "[PACKET] Built ${packets.size} packets ($packetBytes bytes total) in ${packetizeMs}ms")
 
         val report: SpeechSendReport = if (connected) {
+            android.util.Log.i(TAG, "[TRANSPORT] Transmitting over ${transport.transportType.name} (connected=$connected, packets=${packets.size})...")
             // Low-power governor gating: at LOW the last battery is reserved for
             // NORMAL+ traffic, at CRITICAL only CRITICAL/emergency may transmit.
             // A deferred message is reported honestly — nothing goes on the wire,
@@ -222,16 +237,17 @@ class SpeechPipeline(
                 )
                 return deferred
             }
-            val networkStart = System.currentTimeMillis()
+            val t2SendStarted = System.currentTimeMillis()
             val result: SendResult? = transport.send(
                 data = encoded.data,
                 language = language,
                 isEmergency = effectiveEmergency,
                 priority = encoded.importance.level.toByte()
             )
-            val networkLatencyMs = System.currentTimeMillis() - networkStart
+            val networkLatencyMs = System.currentTimeMillis() - t2SendStarted
             metricsEngine.recordTransportLatency(networkLatencyMs)
             metricsEngine.recordAckLatency(result?.roundTripTimeMs ?: 0)
+            android.util.Log.i(TAG, "[LATENCY_TRACE] TX: T1(created)=${packetizeStart / 1_000_000L}, T2(send_start)=$t2SendStarted, RTT=${result?.roundTripTimeMs ?: 0}ms, transportLatency=${networkLatencyMs}ms, totalSendTime=${System.currentTimeMillis() - totalStart}ms")
 
             SpeechSendReport(
                 text = text,
@@ -259,6 +275,18 @@ class SpeechPipeline(
             val loopback = withContext(Dispatchers.Default) {
                 speechCodec.performLab(text, language)
             }
+            if (loopback.exactMatch && loopback.decodedText.isNotEmpty()) {
+                _incomingMessages.emit(
+                    IncomingMessage(
+                        text = loopback.decodedText,
+                        language = language,
+                        timestamp = System.currentTimeMillis(),
+                        isEmergency = effectiveEmergency
+                    )
+                )
+                _pipelineState.value = _pipelineState.value.copy(lastReceivedText = loopback.decodedText)
+                speakReceived(loopback.decodedText, messageId = 1L, isEmergency = effectiveEmergency)
+            }
             SpeechSendReport(
                 text = text,
                 language = language,
@@ -276,8 +304,8 @@ class SpeechPipeline(
                 totalLatencyMs = System.currentTimeMillis() - totalStart,
                 compressionPercentage = encoded.compressionPercentage,
                 isEmergency = effectiveEmergency,
-                failed = loopback?.exactMatch == false,
-                detail = if (loopback?.exactMatch == true) "local round-trip exact" else "local decode mismatch",
+                failed = !loopback.exactMatch,
+                detail = if (loopback.exactMatch) "local round-trip exact" else "local decode mismatch",
                 overNetwork = false
             )
         }
@@ -307,15 +335,18 @@ class SpeechPipeline(
 
     private suspend fun handleIncomingPayload(payload: ReassembledPayload) {
         _pipelineState.value = _pipelineState.value.copy(isPlaying = true)
-        val start = System.currentTimeMillis()
+        val t3PacketReceived = payload.receivedAt
+        val decodeStart = System.currentTimeMillis()
         val decodeResult = withContext(Dispatchers.Default) { speechCodec.decode(payload.payload) }
-        val decodeMs = System.currentTimeMillis() - start
+        val t4DecodeFinished = System.currentTimeMillis()
+        val decodeMs = t4DecodeFinished - decodeStart
         metricsEngine.recordDecodingLatency(decodeMs)
         metricsEngine.recordNetworkReceiveLatency(decodeMs)
 
         if (decodeResult is DecodeResult.Success) {
             val text = decodeResult.reconstructedText
             if (text.isNotEmpty()) {
+                android.util.Log.i(TAG, "[DECODE] Decoded text in ${decodeMs}ms: \"$text\" (lang=${decodeResult.representation.language})")
                 _incomingMessages.emit(
                     IncomingMessage(
                         text = text,
@@ -326,14 +357,15 @@ class SpeechPipeline(
                 )
                 _pipelineState.value = _pipelineState.value.copy(lastReceivedText = text)
 
-                // Speak the received message (the injected engine applies its
-                // own presence/emergency gating). Synthesis time is measured.
-                speakReceived(text, payload.messageId, payload.isEmergency)
+                val t5TtsStarted = System.currentTimeMillis()
+                val ttsDuration = speakReceived(text, payload.messageId, payload.isEmergency)
+                val t6PlaybackFinished = System.currentTimeMillis()
+                android.util.Log.i(TAG, "[LATENCY_TRACE] RX: T3(recv)=$t3PacketReceived, T4(decode_done)=$t4DecodeFinished (decode=${decodeMs}ms), T5(tts_start)=$t5TtsStarted, T6(tts_done)=$t6PlaybackFinished (ttsDuration=${ttsDuration}ms), totalRxPipeline=${t6PlaybackFinished - decodeStart}ms")
             }
         }
         _pipelineState.value = _pipelineState.value.copy(isPlaying = false)
 
-        val total = System.currentTimeMillis() - start
+        val total = System.currentTimeMillis() - decodeStart
         metricsEngine.recordTotalLatency(total)
     }
 
@@ -342,19 +374,27 @@ class SpeechPipeline(
      * real synthesis latency (bounded so a missing/failed engine never blocks
      * the receive path).
      */
-    private suspend fun speakReceived(text: String, messageId: Long, isEmergency: Boolean) {
-        if (!ttsEngine.isInitialized()) return
+    private suspend fun speakReceived(text: String, messageId: Long, isEmergency: Boolean): Long {
+        if (!ttsEngine.isInitialized()) {
+            android.util.Log.w(TAG, "[TTS] [ERROR] TTS engine not initialized; cannot speak received text")
+            return 0L
+        }
         _pipelineState.value = _pipelineState.value.copy(isPlaying = true)
         val started = System.currentTimeMillis()
         val done = CompletableDeferred<Unit>()
+        val prefix = if (isEmergency) "emerg" else "recv"
+        val utteranceId = "$prefix-$messageId-${System.nanoTime()}"
+        android.util.Log.i(TAG, "[TTS] Speaking received text (emergency=$isEmergency, id=$utteranceId): \"$text\"")
         ttsEngine.speak(
             text = text,
-            utteranceId = "recv-$messageId-${System.nanoTime()}",
+            utteranceId = utteranceId,
             onDone = { done.complete(Unit) }
         )
         withTimeoutOrNull(TTS_UTTERANCE_TIMEOUT_MS) { done.await() }
-        metricsEngine.recordTTSLatency(System.currentTimeMillis() - started)
-        _pipelineState.value = _pipelineState.value.copy(isPlaying = false)
+        val ttsDuration = System.currentTimeMillis() - started
+        metricsEngine.recordTTSLatency(ttsDuration)
+        _pipelineState.value = _pipelineState.value.copy(isPlaying = false, ttsLatencyMs = ttsDuration)
+        return ttsDuration
     }
 
     fun shutdown() {

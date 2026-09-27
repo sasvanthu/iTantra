@@ -79,4 +79,13 @@ interface TransportEngine {
 
     /** Human label like "WIFI // 192.168.1.5:9876". */
     fun getLinkName(): String
+
+    /** Return the last known transport error or failure detail, if any. */
+    fun getLastError(): String? = null
+
+    /** Last transmitted or received packet summary. */
+    fun getLastPacketSummary(): String = "NONE"
+
+    /** Last CRC integrity check status (PASS = true, FAIL = false, null = no packets yet). */
+    fun getLastCrcStatus(): Boolean? = null
 }

@@ -33,13 +33,26 @@ class PresenceAwareTTS(
     }
 
     override fun speak(text: String, utteranceId: String, onDone: (() -> Unit)?) {
-        if (!knowsOfPresence()) {
+        val isEmergency = utteranceId.contains("emerg", ignoreCase = true)
+        if (!isEmergency && !knowsOfPresence()) {
             suppressedSpeeches++
             lastSuppressionReason = "no listener present"
+            try {
+                android.util.Log.i("PresenceTTS", "[TTS] Speech suppressed (no listener present): \"$text\"")
+            } catch (_: Throwable) {
+                // In pure JVM unit tests android.util.Log is not mocked
+            }
             // Nothing reached the speaker; complete immediately so the caller's
             // latency bookkeeping does not block on a speech that never ran.
             onDone?.invoke()
             return
+        }
+        if (isEmergency) {
+            try {
+                android.util.Log.i("PresenceTTS", "[TTS] [EMERGENCY] Bypassing presence check for critical transmission: \"$text\"")
+            } catch (_: Throwable) {
+                // In pure JVM unit tests android.util.Log is not mocked
+            }
         }
         delegate.speak(text, utteranceId, onDone)
     }

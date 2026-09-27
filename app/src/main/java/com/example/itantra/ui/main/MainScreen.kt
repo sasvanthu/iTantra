@@ -16,6 +16,7 @@ fun MainScreen(viewModel: MainViewModel) {
         modifier = Modifier
             .fillMaxSize()
             .background(RetroBackground)
+            .safeDrawingPadding()
     ) {
         Box(modifier = Modifier.weight(1f)) {
             when (uiState.activeTab) {

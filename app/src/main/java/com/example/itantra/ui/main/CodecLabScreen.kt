@@ -3,6 +3,7 @@ package com.example.itantra.ui.main
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -37,7 +38,7 @@ fun CodecLabScreen(viewModel: MainViewModel) {
             .verticalScroll(rememberScrollState())
     ) {
         Text(
-            text = "RETRO CODEC LAB",
+            text = "iTantra CODEC LAB",
             fontFamily = FontFamily.Monospace,
             fontSize = 20.sp,
             fontWeight = FontWeight.Bold,
@@ -47,7 +48,7 @@ fun CodecLabScreen(viewModel: MainViewModel) {
 
         Spacer(modifier = Modifier.height(4.dp))
         Text(
-            text = "BASELINE UTF-8 vs RETRO BINARY FRAME",
+            text = "BASELINE UTF-8 vs COMPACT BINARY FRAME",
             fontFamily = FontFamily.Monospace,
             fontSize = 9.sp,
             color = RetroGray,
@@ -59,7 +60,10 @@ fun CodecLabScreen(viewModel: MainViewModel) {
         // ------- Language selector -------
         LabLabel("LANGUAGE")
         Spacer(modifier = Modifier.height(6.dp))
-        Row {
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
             Language.entries.filter { it != Language.UNKNOWN }.forEach { lang ->
                 LabChip(
                     label = lang.displayName,
@@ -164,9 +168,9 @@ private fun ComparisonPanel(r: CodecLabResult) {
             LabSep()
 
             LabRow("UTF-8 (BASELINE)", "${r.originalUtf8Bytes} bytes", color = RetroCyan)
-            LabRow("RETRO TOKENS", "${r.tokenEncodedBytes} bytes", color = RetroCyan)
-            LabRow("RETRO PHONEMES", "${r.phonemeEncodedBytes} bytes", color = RetroCyan)
-            LabRow("RETRO FRAME (incl CRC)", "${r.encodedBytes} bytes", color = RetroAmber, bold = true)
+            LabRow("BINARY TOKENS", "${r.tokenEncodedBytes} bytes", color = RetroCyan)
+            LabRow("PHONEMES", "${r.phonemeEncodedBytes} bytes", color = RetroCyan)
+            LabRow("COMPACT FRAME (incl CRC)", "${r.encodedBytes} bytes", color = RetroAmber, bold = true)
 
             val percentColor = when {
                 r.compressionPercent > 0 -> RetroGreen

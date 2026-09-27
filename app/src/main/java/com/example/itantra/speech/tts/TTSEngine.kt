@@ -65,23 +65,28 @@ class AndroidTTSEngine : TTSEngine {
                     tts?.setLanguage(Locale.US)
                 }
                 tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                    override fun onStart(utteranceId: String?) {}
+                    override fun onStart(utteranceId: String?) {
+                        Log.i(TAG, "[TTS] Speaking started: utteranceId=$utteranceId")
+                    }
                     override fun onDone(utteranceId: String?) {
+                        Log.i(TAG, "[TTS] Speaking completed: utteranceId=$utteranceId")
                         utteranceId?.let { pendingDone.remove(it)?.invoke() }
                     }
                     override fun onError(utteranceId: String?) {
+                        Log.e(TAG, "[TTS] [ERROR] Speaking error: utteranceId=$utteranceId")
                         utteranceId?.let { pendingDone.remove(it)?.invoke() }
                     }
                     @Deprecated("Deprecated in Java")
                     override fun onError(utteranceId: String?, errorCode: Int) {
+                        Log.e(TAG, "[TTS] [ERROR] Speaking error code $errorCode: utteranceId=$utteranceId")
                         utteranceId?.let { pendingDone.remove(it)?.invoke() }
                     }
                 })
                 initialized = true
-                Log.i(TAG, "TTS initialized for $language")
+                Log.i(TAG, "[TTS] AndroidTTSEngine initialized (dev fallback prototype) for $language")
                 onReady()
             } else {
-                Log.e(TAG, "TTS initialization failed with status: $status")
+                Log.e(TAG, "[TTS] [ERROR] TTS initialization failed with status: $status")
             }
         }
     }
@@ -104,10 +109,11 @@ class AndroidTTSEngine : TTSEngine {
 
     override fun speak(text: String, utteranceId: String, onDone: (() -> Unit)?) {
         if (!initialized) {
-            Log.w(TAG, "TTS not initialized")
+            Log.w(TAG, "[TTS] [ERROR] TTS not initialized, cannot speak")
             onDone?.invoke()
             return
         }
+        Log.i(TAG, "[TTS] Queueing speech utterance: \"$text\" (id=$utteranceId)")
         if (onDone != null) {
             pendingDone[utteranceId] = onDone
             // Safety net: synthesize() must eventually resolve even if the

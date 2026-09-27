@@ -135,7 +135,7 @@ data class EdgeSpec(
     val radio: LabRadio = LabRadio.BLE,
     val role: LabRole = LabRole.HOST,
     val address: String = "",
-    val port: String = "9876"
+    val port: String = "8888"
 ) {
     fun label(): String = "${radio.label}/${if (role == LabRole.HOST) "HOST" else (if (address.isNotBlank()) address else "AUTO-SCAN")}"
 }

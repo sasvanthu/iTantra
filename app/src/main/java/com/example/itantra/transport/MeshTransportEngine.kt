@@ -444,7 +444,9 @@ class MeshTransportEngine(
 
     /** Mirror [envelope] out of every connected edge except [except]. */
     private suspend fun flood(envelope: ByteArray, except: TransportEngine? = null): FloodStats {
+        // Wi-Fi has ~20ms latency vs BLE ~150-300ms: always prefer Wi-Fi edges first for real-time audio!
         val targets = edges.filter { it !== except && it.isConnected() }
+            .sortedByDescending { it.transportType == TransportType.WIFI }
         if (targets.isEmpty()) return FloodStats(0, 0, 0)
         val results = coroutineScope {
             targets.map { edge ->
@@ -565,8 +567,9 @@ class MeshTransportEngine(
         val status = when {
             edges.isEmpty() -> ConnectionStatus.DISCONNECTED
             live.isNotEmpty() -> ConnectionStatus.CONNECTED
+            edges.any { it.connectionStatus.value == ConnectionStatus.HANDSHAKING } -> ConnectionStatus.HANDSHAKING
             edges.any { it.connectionStatus.value == ConnectionStatus.WAITING } -> ConnectionStatus.WAITING
-            edges.any { it.connectionStatus.value == ConnectionStatus.CONNECTING } -> ConnectionStatus.CONNECTING
+            edges.any { it.connectionStatus.value == ConnectionStatus.CONNECTING || it.connectionStatus.value == ConnectionStatus.DISCOVERING } -> ConnectionStatus.CONNECTING
             else -> ConnectionStatus.DISCONNECTED
         }
         val prev = _connectionStatus.value
@@ -604,6 +607,14 @@ class MeshTransportEngine(
             resetLink("all mesh edges lost")
         }
     }
+
+    override fun getLastError(): String? = edges.firstNotNullOfOrNull { it.getLastError() }
+
+    override fun getLastPacketSummary(): String =
+        edges.map { it.getLastPacketSummary() }.firstOrNull { it != "NONE" } ?: "NONE"
+
+    override fun getLastCrcStatus(): Boolean? =
+        edges.mapNotNull { it.getLastCrcStatus() }.firstOrNull()
 
     private fun resetLink(reason: String) {
         if (_session.value != null) {

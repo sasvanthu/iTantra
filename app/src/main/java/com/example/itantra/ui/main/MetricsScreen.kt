@@ -32,7 +32,7 @@ fun MetricsScreen(viewModel: MainViewModel) {
             .verticalScroll(rememberScrollState())
     ) {
         Text(
-            text = "LIVE METRICS",
+            text = "iTantra METRICS",
             fontFamily = FontFamily.Monospace,
             fontSize = 20.sp,
             fontWeight = FontWeight.Bold,
@@ -42,48 +42,69 @@ fun MetricsScreen(viewModel: MainViewModel) {
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        fun ms(v: Long): String = if (v > 0) "$v ms" else "NOT MEASURED"
-        fun b(v: Int): String = "$v B"
+        fun msLocal(v: Long): String? = if (v > 0) "$v ms [MEASURED]" else null
+        fun msNet(v: Long): String = when {
+            uiState.isConnected && v > 0 -> "$v ms [MEASURED]"
+            uiState.simulationEnabled && v > 0 -> "$v ms [SIMULATED]"
+            else -> "PHYSICAL TEST PENDING"
+        }
+        fun b(v: Int): String? = if (v > 0) "$v B" else null
 
-        // Latency Section — every row is either a real reading or an explicit
-        // NOT MEASURED; nothing is ever fabricated as a zero.
-        MetricSection("LATENCY") {
-            MetricRow("STT:", ms((metrics?.latency?.sttLatencyMs ?: 0L)))
-            MetricRow("Encoding:", ms(metrics?.latency?.encodingLatencyMs ?: 0L))
-            MetricRow("Packetization:", ms(metrics?.latency?.packetizationLatencyMs ?: 0L))
-            MetricRow("Network send:", ms(metrics?.latency?.transportLatencyMs ?: 0L))
-            MetricRow("Network receive:", ms(metrics?.latency?.networkReceiveLatencyMs ?: 0L))
-            MetricRow("ACK latency:", ms(metrics?.latency?.ackLatencyMs ?: 0L))
-            MetricRow("RTT:", ms(metrics?.latency?.roundTripTimeMs ?: 0L), RetroAmber)
-            MetricRow("Decoding:", ms(metrics?.latency?.decodingLatencyMs ?: 0L))
-            MetricRow("TTS:", ms(metrics?.latency?.ttsLatencyMs ?: 0L))
-            MetricRow("End-to-end:", ms(metrics?.latency?.totalLatencyMs ?: 0L), RetroAmber)
+        // Active Transport & Route Info
+        MetricSection("ACTIVE TRANSPORT & ROUTE") {
+            MetricRow("Selected Transport:", uiState.transportMode.name, RetroAmber)
+            MetricRow("Voice Route Status:", uiState.voiceTransportRoute,
+                if (uiState.voiceTransportRoute.contains("WI-FI")) RetroGreen else RetroCyan)
+            MetricRow("Physical Peer Status:", if (uiState.isConnected) "CONNECTED" else "PHYSICAL TEST PENDING",
+                if (uiState.isConnected) RetroGreen else RetroGray)
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Latency Section — strictly distinguishes MEASURED, SIMULATED, TARGET, and PHYSICAL TEST PENDING
+        MetricSection("LATENCY (MEASURED vs TARGET)") {
+            LabeledMetricRow("STT capture:", msLocal(metrics?.latency?.sttLatencyMs ?: 0L), "< 1200 ms")
+            LabeledMetricRow("Encoding (codec):", msLocal(metrics?.latency?.encodingLatencyMs ?: 0L), "< 15 ms")
+            LabeledMetricRow("Packetization:", msLocal(metrics?.latency?.packetizationLatencyMs ?: 0L), "< 5 ms")
+            LabeledMetricRow("Transport TX:", msNet(metrics?.latency?.transportLatencyMs ?: 0L), "< 150 ms")
+            LabeledMetricRow("Network receive:", msNet(metrics?.latency?.networkReceiveLatencyMs ?: 0L), "< 25 ms")
+            LabeledMetricRow("ACK / RTT:", msNet(metrics?.latency?.roundTripTimeMs ?: 0L), "< 200 ms", RetroAmber)
+            LabeledMetricRow("Decoding:", msLocal(metrics?.latency?.decodingLatencyMs ?: 0L), "< 15 ms")
+            LabeledMetricRow("TTS synthesis:", msLocal(metrics?.latency?.ttsLatencyMs ?: 0L), "< 200 ms")
+            LabeledMetricRow("Total speech path:", msLocal(metrics?.latency?.totalLatencyMs ?: 0L), "< 1500 ms", RetroAmber)
         }
 
         Spacer(modifier = Modifier.height(12.dp))
 
         // Size Section
-        MetricSection("SIZE ANALYSIS") {
-            MetricRow("Original UTF-8:", "${metrics?.size?.originalUtf8Bytes ?: 0} bytes")
-            MetricRow("Token Encoded:", "${metrics?.size?.tokenEncodedBytes ?: 0} bytes")
-            MetricRow("Phoneme Encoded:", "${metrics?.size?.phonemeEncodedBytes ?: 0} bytes")
-            MetricRow("Final Encoded:", "${metrics?.size?.finalEncodedBytes ?: 0} bytes")
-            MetricRow("Compression:", "${String.format("%.1f", metrics?.size?.compressionPercentage ?: 0.0)}%",
-                if ((metrics?.size?.compressionPercentage ?: 0.0) > 0) RetroGreen else RetroRed)
+        MetricSection("BANDWIDTH & COMPRESSION") {
+            val compVal = metrics?.size?.compressionPercentage ?: 0.0
+            val compStr = if (compVal > 0.0) String.format("%.1f%%", compVal) else null
+            LabeledMetricRow("Compression ratio:", compStr, "> 50.0%",
+                if (compVal > 0) RetroGreen else RetroRed)
+            LabeledMetricRow("Original UTF-8:", b(metrics?.size?.originalUtf8Bytes ?: 0), "input size")
+            LabeledMetricRow("Token Encoded:", b(metrics?.size?.tokenEncodedBytes ?: 0), "< original")
+            LabeledMetricRow("Final Encoded:", b(metrics?.size?.finalEncodedBytes ?: 0), "< original")
         }
 
         Spacer(modifier = Modifier.height(12.dp))
 
         // Transport Section
-        MetricSection("TRANSPORT") {
-            MetricRow("Packets Sent:", "${metrics?.transport?.packetsSent ?: 0}")
-            MetricRow("Packets Received:", "${metrics?.transport?.packetsReceived ?: 0}")
-            MetricRow("Retransmissions:", "${metrics?.transport?.retransmissions ?: 0}")
-            MetricRow("Packet Loss:", "${metrics?.transport?.packetLoss ?: 0}")
-            MetricRow("TX Bytes:", "${uiState.linkMetrics.transmittedBytes}")
-            MetricRow("RX Bytes:", "${uiState.linkMetrics.receivedBytes}")
-            MetricRow("Duplicates:", "${uiState.linkMetrics.duplicatePackets}")
-            MetricRow("Corrupted frames:", "${uiState.linkMetrics.corruptedFrames}")
+        MetricSection("TRANSPORT RELIABILITY") {
+            val loss = metrics?.transport?.packetLoss ?: 0
+            val retr = metrics?.transport?.retransmissions ?: 0
+            LabeledMetricRow("Packets Sent:", "${metrics?.transport?.packetsSent ?: 0}", "session total")
+            LabeledMetricRow("Packets Received:", "${metrics?.transport?.packetsReceived ?: 0}", "session total")
+            LabeledMetricRow("Retransmissions:", "$retr", "0 (ideal)",
+                if (retr > 0) RetroAmber else RetroGreen)
+            LabeledMetricRow("Packet Loss:", "$loss", "0 (reliable)",
+                if (loss > 0) RetroRed else RetroGreen)
+            MetricRow("TX Wire Bytes:", "${uiState.linkMetrics.transmittedBytes} B")
+            MetricRow("RX Wire Bytes:", "${uiState.linkMetrics.receivedBytes} B")
+            MetricRow("Duplicate frames:", "${uiState.linkMetrics.duplicatePackets}",
+                if (uiState.linkMetrics.duplicatePackets > 0) RetroAmber else RetroGreen)
+            MetricRow("Corrupted frames:", "${uiState.linkMetrics.corruptedFrames}",
+                if (uiState.linkMetrics.corruptedFrames > 0) RetroRed else RetroGreen)
         }
 
         Spacer(modifier = Modifier.height(12.dp))
@@ -304,5 +325,52 @@ fun MetricRow(label: String, value: String, valueColor: Color = RetroCyan) {
             fontWeight = FontWeight.Bold,
             color = valueColor
         )
+    }
+}
+
+@Composable
+fun LabeledMetricRow(
+    label: String,
+    measured: String?,
+    target: String? = null,
+    valueColor: Color = RetroCyan
+) {
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = label,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+                color = RetroGray
+            )
+            if (measured != null && measured.isNotBlank()) {
+                Text(
+                    text = "[MEASURED: $measured]",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = valueColor
+                )
+            } else {
+                Text(
+                    text = "[NOT AVAILABLE]",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    color = RetroDarkGray.copy(alpha = 0.8f)
+                )
+            }
+        }
+        if (target != null) {
+            Text(
+                text = "  ↳ TARGET: $target",
+                fontFamily = FontFamily.Monospace,
+                fontSize = 9.sp,
+                color = RetroGray.copy(alpha = 0.7f)
+            )
+        }
     }
 }

@@ -1,4 +1,4 @@
-﻿package com.example.itantra.ui.main
+package com.example.itantra.ui.main
 
 import android.os.Build
 import androidx.compose.foundation.background
@@ -47,7 +47,7 @@ fun HardwareTestScreen(viewModel: HardwareTestViewModel = viewModel()) {
             .verticalScroll(rememberScrollState())
     ) {
         Text(
-            text = "HARDWARE TEST",
+            text = "iTantra HARDWARE TEST",
             fontFamily = FontFamily.Monospace,
             fontSize = 20.sp,
             fontWeight = FontWeight.Bold,
@@ -116,6 +116,47 @@ fun HardwareTestScreen(viewModel: HardwareTestViewModel = viewModel()) {
             if (state.meshNode == null) {
                 HwStatusRow("NOTE:", "one phone HOST, the other DEVICE, both in HARDWARE TEST", RetroGray)
             }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+        MetricSection("CONNECTION DIAGNOSTICS") {
+            Text(
+                text = "WIFI",
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = RetroAmber
+            )
+            MetricRow("Server:", state.diagnostics.wifiServer, if (state.diagnostics.wifiServer == "READY") RetroGreen else RetroGray)
+            MetricRow("Client:", state.diagnostics.wifiClient, if (state.diagnostics.wifiClient == "CONNECTED") RetroGreen else RetroGray)
+            MetricRow("Handshake:", state.diagnostics.wifiHandshake, if (state.diagnostics.wifiHandshake == "PASS") RetroGreen else if (state.diagnostics.wifiHandshake == "FAIL") RetroRed else RetroGray)
+
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "BLE",
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = RetroAmber
+            )
+            MetricRow("Advertising:", state.diagnostics.bleAdvertising, if (state.diagnostics.bleAdvertising == "ON") RetroGreen else RetroGray)
+            MetricRow("Scanning:", state.diagnostics.bleScanning, if (state.diagnostics.bleScanning == "ON") RetroGreen else RetroGray)
+            MetricRow("GATT:", state.diagnostics.bleGatt, if (state.diagnostics.bleGatt == "CONNECTED") RetroGreen else RetroGray)
+            MetricRow("Notifications:", state.diagnostics.bleNotifications, if (state.diagnostics.bleNotifications == "ENABLED") RetroGreen else RetroGray)
+            MetricRow("Handshake:", state.diagnostics.bleHandshake, if (state.diagnostics.bleHandshake == "PASS") RetroGreen else if (state.diagnostics.bleHandshake == "FAIL") RetroRed else RetroGray)
+
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "PROTOCOL",
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = RetroAmber
+            )
+            MetricRow("Version:", state.diagnostics.protocolVersion, RetroCyan)
+            MetricRow("CRC:", state.diagnostics.protocolCrc, if (state.diagnostics.protocolCrc == "PASS") RetroGreen else if (state.diagnostics.protocolCrc == "FAIL") RetroRed else RetroGray)
+            MetricRow("Last packet:", state.diagnostics.lastPacket, RetroCyan)
+            MetricRow("Last error:", state.diagnostics.lastError, if (state.diagnostics.lastError != "NONE") RetroRed else RetroGray)
         }
 
         if (state.transport == LabRadio.BLE) {
@@ -492,6 +533,8 @@ private fun fragLabel(p: ProbeResult): String =
 private fun hwStatusLabel(s: ConnectionStatus): String = when (s) {
     ConnectionStatus.DISCONNECTED -> "DISCONNECTED"
     ConnectionStatus.CONNECTING -> "CONNECTING"
+    ConnectionStatus.DISCOVERING -> "DISCOVERING"
+    ConnectionStatus.HANDSHAKING -> "HANDSHAKING"
     ConnectionStatus.WAITING -> "WAITING"
     ConnectionStatus.CONNECTED -> "CONNECTED"
     ConnectionStatus.ERROR -> "ERROR"
@@ -500,6 +543,6 @@ private fun hwStatusLabel(s: ConnectionStatus): String = when (s) {
 private fun hwStatusColor(s: ConnectionStatus): Color = when (s) {
     ConnectionStatus.CONNECTED -> RetroGreen
     ConnectionStatus.ERROR -> RetroRed
-    ConnectionStatus.CONNECTING, ConnectionStatus.WAITING -> RetroAmber
+    ConnectionStatus.CONNECTING, ConnectionStatus.DISCOVERING, ConnectionStatus.HANDSHAKING, ConnectionStatus.WAITING -> RetroAmber
     ConnectionStatus.DISCONNECTED -> RetroGray
 }

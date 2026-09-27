@@ -201,6 +201,10 @@ class RetroSpeechCodecTest {
     fun `encode handles Tamil text`() {
         val payload = codec.encode("உதவி தேவை", Language.TAMIL)
         assertTrue(payload.data.isNotEmpty())
+        val decoded = codec.decode(payload.data)
+        assertTrue(decoded is DecodeResult.Success)
+        println("TAMIL DECODED: '" + (decoded as DecodeResult.Success).reconstructedText + "'")
+        assertEquals("உதவி தேவை", decoded.reconstructedText)
     }
 
     @Test

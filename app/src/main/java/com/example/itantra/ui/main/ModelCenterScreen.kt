@@ -37,7 +37,7 @@ fun ModelCenterScreen(viewModel: MainViewModel) {
             .verticalScroll(rememberScrollState())
     ) {
         Text(
-            text = "MODEL CENTER",
+            text = "iTantra MODEL CENTER",
             fontFamily = FontFamily.Monospace,
             fontSize = 20.sp,
             fontWeight = FontWeight.Bold,

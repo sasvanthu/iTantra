@@ -32,7 +32,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
             .verticalScroll(rememberScrollState())
     ) {
         Text(
-            text = "CONFIGURATION",
+            text = "iTantra CONFIGURATION",
             fontFamily = FontFamily.Monospace,
             fontSize = 20.sp,
             fontWeight = FontWeight.Bold,

@@ -136,4 +136,18 @@ class PresenceAwareTTSTest {
         assertFalse(aware.isInitialized())
         assertFalse(delegate.isInitialized())
     }
+
+    @Test
+    fun `emergency utterances bypass presence suppression`() {
+        val delegate = RecordingTTSEngine()
+        val aware = PresenceAwareTTS(delegate) { false } // nobody present!
+        aware.speak("Standard message", "recv-100-1")
+        assertEquals("Standard message was suppressed", 0, delegate.spoken.size)
+        assertEquals(1, aware.suppressedSpeeches)
+
+        aware.speak("CRITICAL HELP NEEDED", "emerg-101-2")
+        assertEquals("Emergency message bypassed presence suppression", 1, delegate.spoken.size)
+        assertEquals("CRITICAL HELP NEEDED", delegate.spoken[0].first)
+        assertEquals("Suppression count was not incremented for emergency", 1, aware.suppressedSpeeches)
+    }
 }

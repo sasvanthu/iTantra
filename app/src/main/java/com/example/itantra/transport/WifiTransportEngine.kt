@@ -38,18 +38,28 @@ class WifiTransportEngine(
     private var output: DataOutputStream? = null
     private val writeLock = Any()
 
+    val isServerListening: Boolean
+        get() = serverSocket?.let { it.isBound && !it.isClosed } ?: false
+
     override suspend fun openLinkAsHost(port: Int): Boolean {
         return withContext(Dispatchers.IO) {
             try {
+                closeSocket()
                 val server = ServerSocket()
                 server.reuseAddress = true
                 server.bind(InetSocketAddress(port))
                 serverSocket = server
+                if (!server.isBound || server.isClosed) {
+                    setEngineError("Server socket failed to bind to port $port")
+                    closeSocket()
+                    return@withContext false
+                }
                 val accepted = server.accept()
                 accepted.tcpNoDelay = true
                 setUpSocket(accepted)
                 true
             } catch (e: Exception) {
+                setEngineError("Wi-Fi Host error: ${e.message ?: "port $port bind/accept failed"}")
                 closeSocket()
                 false
             }
@@ -57,14 +67,23 @@ class WifiTransportEngine(
     }
 
     override suspend fun openLinkAsClient(host: String, port: Int): Boolean {
+        val targetHost = host.trim()
+        if (targetHost.isEmpty()) {
+            setEngineError("Host IP address is required for Wi-Fi connection")
+            return false
+        }
         return withContext(Dispatchers.IO) {
             try {
+                closeSocket()
                 val s = Socket()
-                s.connect(InetSocketAddress(host, port), 5000)
+                s.connect(InetSocketAddress(targetHost, port), 6000)
                 s.tcpNoDelay = true
                 setUpSocket(s)
                 true
             } catch (e: Exception) {
+                if (!disconnectRequested()) {
+                    setEngineError("Wi-Fi connect to $targetHost:$port failed: ${e.message ?: "connection refused or timed out"}")
+                }
                 closeSocket()
                 false
             }
@@ -128,30 +147,80 @@ class WifiTransportEngine(
     override fun pollLocalAddress(): String {
         socket?.let { s ->
             s.localAddress?.let { a ->
-                if (a is Inet4Address && !a.isAnyLocalAddress) return a.hostAddress ?: ""
+                if (a is Inet4Address && !a.isAnyLocalAddress && !a.isLoopbackAddress) {
+                    return a.hostAddress ?: ""
+                }
             }
         }
         return detectWifiAddress()
     }
 
-    /** Prefer the site-local (wifi/hotspot) IPv4, falling back to any IPv4. */
+    /**
+     * Finds the real Wi-Fi / SoftAP (hotspot) IPv4 address.
+     * Prioritizes wlan/ap/softap/eth interfaces and explicitly rejects cellular (rmnet/pdp).
+     */
     private fun detectWifiAddress(): String {
         try {
-            val all = NetworkInterface.getNetworkInterfaces()
-            for (net in all) {
-                if (!net.isUp || net.isLoopback || net.isVirtual) continue
+            val interfaces = NetworkInterface.getNetworkInterfaces()?.toList() ?: return ""
+
+            // Priority 1: Interfaces explicitly matching Wi-Fi or Hotspot names
+            val wifiInterfaces = interfaces.filter { net ->
+                val name = net.name.lowercase(java.util.Locale.ROOT)
+                (name.startsWith("wlan") || name.startsWith("ap") || name.startsWith("softap") ||
+                 name.startsWith("swlan") || name.startsWith("wigig") || name.startsWith("eth"))
+            }
+
+            for (net in wifiInterfaces) {
                 for (addr in net.inetAddresses) {
-                    if (addr is Inet4Address && addr.isSiteLocalAddress) {
-                        return addr.hostAddress ?: ""
+                    if (addr is Inet4Address && !addr.isLoopbackAddress && !addr.isAnyLocalAddress && !addr.isLinkLocalAddress) {
+                        val host = addr.hostAddress ?: continue
+                        if (host.isNotEmpty() && host != "127.0.0.1") {
+                            return host
+                        }
                     }
                 }
             }
-            val allAgain = NetworkInterface.getNetworkInterfaces()
-            for (net in allAgain) {
-                if (!net.isUp || net.isLoopback || net.isVirtual) continue
+
+            // Priority 2: Non-cellular interfaces with site-local IPv4
+            val nonCellular = interfaces.filterNot { net ->
+                val name = net.name.lowercase(java.util.Locale.ROOT)
+                name.startsWith("rmnet") || name.startsWith("ccmni") || name.startsWith("pdp") ||
+                name.startsWith("dummy") || name.startsWith("tun") || name.startsWith("tap") ||
+                name.startsWith("sit") || name.startsWith("radio") || net.isLoopback
+            }
+
+            for (net in nonCellular) {
                 for (addr in net.inetAddresses) {
-                    if (addr is Inet4Address && !addr.isAnyLocalAddress) {
-                        return addr.hostAddress ?: ""
+                    if (addr is Inet4Address && addr.isSiteLocalAddress && !addr.isLoopbackAddress) {
+                        val host = addr.hostAddress ?: continue
+                        if (host.isNotEmpty() && host != "127.0.0.1") {
+                            return host
+                        }
+                    }
+                }
+            }
+
+            // Priority 3: Any non-cellular non-loopback IPv4
+            for (net in nonCellular) {
+                for (addr in net.inetAddresses) {
+                    if (addr is Inet4Address && !addr.isLoopbackAddress && !addr.isAnyLocalAddress) {
+                        val host = addr.hostAddress ?: continue
+                        if (host.isNotEmpty() && host != "127.0.0.1") {
+                            return host
+                        }
+                    }
+                }
+            }
+
+            // Priority 4: Fallback to any site-local address
+            for (net in interfaces) {
+                if (net.isLoopback) continue
+                for (addr in net.inetAddresses) {
+                    if (addr is Inet4Address && addr.isSiteLocalAddress && !addr.isLoopbackAddress) {
+                        val host = addr.hostAddress ?: continue
+                        if (host.isNotEmpty()) {
+                            return host
+                        }
                     }
                 }
             }
