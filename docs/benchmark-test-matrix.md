@@ -1,6 +1,7 @@
 # Benchmark / Test Matrix
 
-Baseline run: `gradlew.bat testDebugUnitTest` → **219 tests · 29 suites · 0 failures**.
+Baseline run: `gradlew.bat testDebugUnitTest` → **367 tests · 29 suites ·
+0 failures, 1 skipped** (baseline 321 → current; latest measured full run).
 
 Ctrl-f each keyword in the JVM suite to reproduce the exact test.
 
@@ -80,11 +81,34 @@ Ctrl-f each keyword in the JVM suite to reproduce the exact test.
 - Transport counters on METRICS come from `LinkMetrics` (wire) via `MetricsEngine.syncTransport`.
 - UI renders `NOT MEASURED` for any non-positive latency instead of `0`.
 
+## Baseline metrics / benchmark lab
+
+| Case | Expectation | Suite file |
+|---|---|---|
+| Cold start vs steady state | cold ≥ steady − slack; p95 ≥ min | `BaselineMetricsTest` |
+| Mixed-corpus wire ≤ UTF-8, each ≤ 512 B | honest compression envelope | `BaselineMetricsTest` |
+| Heap delta over 500 round-trips | bounded, labeled JVM estimate | `BaselineMetricsTest` |
+| Physical latency/wire table (9 cells) | measured, lossless | `PhysicalMeasuredBenchmarkTest` |
+
+## Phase 8-13 regression
+
+| Case | Expectation | Suite file |
+|---|---|---|
+| Hysteresis: 3 consecutive samples to commit | mode stable, no churn | `PhaseComponentsTest` |
+| Weak RSSI / deep queue floors | conservative degrade, never upgrade | `PhaseComponentsTest` |
+| Health unknown until first sample | honest initial state | `PhaseComponentsTest` |
+| Byte-budget queue displacement / oversized drop | weakest lowest first, counted | `PhaseComponentsTest` |
+| Lossless layer 2 opt-in, loss-tolerant reassembly | base never blocked | `ProgressiveLayeredPipelineTest` |
+| SUTRA domains/dialects/romanized keywords | English + romanized hi/ta | `SutraFrameTest` |
+| Corrupt/missing model → ERROR, valid → READY+evict | lifecycle honest | `StreamingAsrAndModelLifecycleTest` |
+| Uncertain STT tokens never ship as truth | flags guard semantics | `StreamingAsrAndModelLifecycleTest` |
+| SUTRA router: meaning + importance + ids | deterministic | `SemanticDispatchRouterTest` |
+
 ## Build checks
 
 | Command | Contract |
 |---|---|
-| `gradlew.bat testDebugUnitTest` | 219 tests · 0 failures (must never regress below) |
+| `gradlew.bat testDebugUnitTest` | 367 tests · 0 failures · 1 skipped (must never regress below) |
 | `gradlew.bat assembleDebug` | green APK build |
 
 ## On-device hardware checklist (HW TEST tab, not replaceable by JVM)

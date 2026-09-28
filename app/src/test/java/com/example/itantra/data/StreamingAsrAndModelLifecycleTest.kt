@@ -84,6 +84,80 @@ class StreamingAsrAndModelLifecycleTest {
     }
 
     @Test
+    fun `StablePrefixTracker flags uncertain tokens so they never ship as truth`() {
+        val tracker = StablePrefixTracker(stabilityThreshold = 2)
+
+        // Fresh token: low confidence -> tagged UNCERTAIN until proven stable.
+        val (_, t1) = tracker.update("need")
+        assertTrue(t1[0].isUncertainFlagged)
+
+        // Repeated token: stable confidence 0.95 -> no uncertainty flag.
+        val (_, t2) = tracker.update("need more")
+        assertFalse(t2[0].isUncertainFlagged)
+        assertTrue(t2[1].isUncertainFlagged) // "more" is new -> still uncertain
+        assertEquals("need", tracker.getCommittedPrefix())
+    }
+
+    @Test
+    fun `ModelLifecycleManager refuses corrupted model files and reports the reason`() {
+        val testDir = tempFolder.newFolder("models-validated")
+        val corruptFile = File(testDir, "corrupt-stt.bin")
+        corruptFile.writeText("not the real model")
+
+        val manager = ModelLifecycleManager()
+        val sttManifest = ModelManifest(
+            modelId = "stt-validated",
+            language = Language.ENGLISH,
+            kind = ModelManager.ModelKind.STT,
+            version = "1.0",
+            sha256 = "a".repeat(64),
+            expectedSizeBytes = 0L,
+            runtime = "SHERPA_ONNX",
+            quantization = "INT8",
+            localFileName = "corrupt-stt.bin"
+        )
+
+        // Corrupted (size/hash mismatch) -> ERROR, never READY, never admitted to RAM.
+        assertFalse("corrupted model file must be refused", manager.acquireValidatedStt(sttManifest, corruptFile))
+        assertEquals(ModelLifecycleState.ERROR, manager.currentSttState)
+        assertNull(manager.currentSttModel)
+        assertNotNull("a validation reason must be surfaced", manager.lastValidationFailure)
+
+        // Missing file -> ERROR too.
+        val missingFile = File(testDir, "missing.bin")
+        assertFalse("missing model file must be refused", manager.acquireValidatedStt(sttManifest, missingFile))
+        assertEquals(ModelLifecycleState.ERROR, manager.currentSttState)
+    }
+
+    @Test
+    fun `ModelLifecycleManager admits a valid model file to READY and evicts it cleanly`() {
+        val testDir = tempFolder.newFolder("models-valid")
+        val goodFile = File(testDir, "good-tts.bin")
+        val content = "synthetic piper voice weights".toByteArray(StandardCharsets.UTF_8)
+        goodFile.writeBytes(content)
+        val sha = ModelValidator.computeSha256(goodFile)
+
+        val manager = ModelLifecycleManager()
+        val ttsManifest = ModelManifest(
+            modelId = "tts-valid",
+            language = Language.ENGLISH,
+            kind = ModelManager.ModelKind.TTS,
+            version = "1.0",
+            sha256 = sha,
+            expectedSizeBytes = content.size.toLong(),
+            runtime = "PIPER",
+            quantization = "INT8",
+            localFileName = "good-tts.bin"
+        )
+
+        val admitted = manager.acquireValidatedTts(ttsManifest, goodFile)
+        assertTrue("matching file must be admitted", admitted)
+        assertEquals(ModelLifecycleState.READY, manager.currentTtsState)
+        assertEquals(ttsManifest, manager.currentTtsModel)
+        assertEquals("accepted admission must not set a failure reason", null, manager.lastValidationFailure)
+    }
+
+    @Test
     fun `ModelLifecycleManager enforces single active model residency in RAM`() {
         val manager = ModelLifecycleManager()
 

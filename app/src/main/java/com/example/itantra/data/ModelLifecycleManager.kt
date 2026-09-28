@@ -1,6 +1,7 @@
 package com.example.itantra.data
 
 import android.util.Log
+import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -46,6 +47,11 @@ class ModelLifecycleManager {
     val currentSttModel: ModelManifest? get() = synchronized(lock) { activeSttModel }
     val currentTtsModel: ModelManifest? get() = synchronized(lock) { activeTtsModel }
 
+    /** Human-readable reason of the most recent file validation failure, if any. */
+    @Volatile
+    var lastValidationFailure: String? = null
+        private set
+
     private fun safeLogWarn(msg: String) {
         try {
             Log.w(TAG, msg)
@@ -59,6 +65,34 @@ class ModelLifecycleManager {
      * Enforces the single-active-model rule: if a TTS model is resident, it triggers TTS eviction.
      */
     fun acquireStt(manifest: ModelManifest): Boolean = synchronized(lock) {
+        acquireSttLocked(manifest)
+    }
+
+    /**
+     * Cryptographic file validation before [acquireStt]: the on-disk asset must
+     * match [manifest] (SHA-256 / size) or the model transitions to ERROR and
+     * is never admitted to RAM. Returns false with [lastValidationFailure] set
+     * when the file is missing or corrupted.
+     */
+    fun acquireValidatedStt(manifest: ModelManifest, file: File): Boolean = synchronized(lock) {
+        when (val result = ModelValidator.validate(file, manifest)) {
+            is ModelValidator.ValidationResult.Valid ->
+                acquireSttLocked(manifest)
+            is ModelValidator.ValidationResult.Missing -> {
+                lastValidationFailure = "STT model file missing: ${result.expectedPath}"
+                sttState = ModelLifecycleState.ERROR
+                false
+            }
+            is ModelValidator.ValidationResult.Corrupted -> {
+                lastValidationFailure =
+                    "STT model corrupted (${result.reason}); expected=${shortHash(result.expectedHash)} actual=${shortHash(result.actualHash)}"
+                sttState = ModelLifecycleState.ERROR
+                false
+            }
+        }
+    }
+
+    private fun acquireSttLocked(manifest: ModelManifest): Boolean {
         if (ttsInferenceCount.get() > 0) {
             // Cannot evict TTS while speech synthesis is actively rendering audio
             safeLogWarn("Cannot acquire STT: TTS is currently active in synthesis")
@@ -106,6 +140,34 @@ class ModelLifecycleManager {
      * Enforces single-active-model rule: evicts resident ASR model.
      */
     fun acquireTts(manifest: ModelManifest): Boolean = synchronized(lock) {
+        acquireTtsLocked(manifest)
+    }
+
+    /**
+     * Cryptographic file validation before [acquireTts]: the on-disk voice must
+     * match [manifest] (SHA-256 / size) or the model transitions to ERROR and
+     * is never admitted to RAM. Returns false with [lastValidationFailure] set
+     * when the file is missing or corrupted.
+     */
+    fun acquireValidatedTts(manifest: ModelManifest, file: File): Boolean = synchronized(lock) {
+        when (val result = ModelValidator.validate(file, manifest)) {
+            is ModelValidator.ValidationResult.Valid ->
+                acquireTtsLocked(manifest)
+            is ModelValidator.ValidationResult.Missing -> {
+                lastValidationFailure = "TTS voice missing: ${result.expectedPath}"
+                ttsState = ModelLifecycleState.ERROR
+                false
+            }
+            is ModelValidator.ValidationResult.Corrupted -> {
+                lastValidationFailure =
+                    "TTS voice corrupted (${result.reason}); expected=${shortHash(result.expectedHash)} actual=${shortHash(result.actualHash)}"
+                ttsState = ModelLifecycleState.ERROR
+                false
+            }
+        }
+    }
+
+    private fun acquireTtsLocked(manifest: ModelManifest): Boolean {
         if (sttInferenceCount.get() > 0) {
             safeLogWarn("Cannot acquire TTS: STT is currently capturing speech")
             return false
@@ -121,6 +183,9 @@ class ModelLifecycleManager {
         ttsState = ModelLifecycleState.READY
         return true
     }
+
+    private fun shortHash(hash: String): String =
+        if (hash.length > 12) hash.take(12) + "…" else hash
 
     fun startTtsInference(): Boolean = synchronized(lock) {
         if (ttsState != ModelLifecycleState.READY && ttsState != ModelLifecycleState.ACTIVE) {

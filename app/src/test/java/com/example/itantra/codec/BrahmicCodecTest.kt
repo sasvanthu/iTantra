@@ -138,6 +138,153 @@ class BrahmicCodecTest {
         assertNull(BrahmicCodec.decode(ByteArray(3)))
     }
 
+    // ------------------------------------------------------------------
+    // Exhaustive lossless verification across every code point we claim
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `every code point in each of the 9 Indic script blocks round trips losslessly`() {
+        val scriptBlocks = listOf(
+            Language.HINDI to 0x0900,      // Devanagari
+            Language.BENGALI to 0x0980,    // Bengali
+            Language.GUJARATI to 0x0A80,   // Gujarati
+            Language.ODIA to 0x0B00,       // Odia
+            Language.TAMIL to 0x0B80,      // Tamil
+            Language.TELUGU to 0x0C00,     // Telugu
+            Language.KANNADA to 0x0C80,    // Kannada
+            Language.MALAYALAM to 0x0D00   // Malayalam
+        )
+
+        for ((lang, base) in scriptBlocks) {
+            for (offset in 0..127) {
+                val codepoint = base + offset
+                val text = String(Character.toChars(codepoint))
+                val encoded = BrahmicCodec.encode(text, lang)
+                val decoded = BrahmicCodec.decode(encoded)
+                assertEquals(
+                    "U+${codepoint.toString(16).padStart(4, '0')} via $lang must decode losslessly",
+                    text, decoded
+                )
+            }
+        }
+
+        // Marathi reuses the Devanagari block and must not be lost.
+        for (offset in 0..127) {
+            val codepoint = 0x0900 + offset
+            val text = String(Character.toChars(codepoint))
+            val decoded = BrahmicCodec.decode(BrahmicCodec.encode(text, Language.MARATHI))
+            assertEquals("Marathi (Devanagari) U+${codepoint.toString(16)} round trip", text, decoded)
+        }
+    }
+
+    @Test
+    fun `every printable ASCII code point round trips losslessly`() {
+        for (code in 0x20..0x7E) {
+            val text = code.toChar().toString()
+            val encoded = BrahmicCodec.encode(text, Language.ENGLISH)
+            val decoded = BrahmicCodec.decode(encoded)
+            assertEquals("ASCII 0x${code.toString(16)} must round trip", text, decoded)
+        }
+    }
+
+    @Test
+    fun `Indic digits in every script round trip losslessly`() {
+        // Devanagari, Bengali, Gujarati, Odia, Tamil, Telugu, Kannada, Malayalam
+        val digitBlocks = listOf(0x0966, 0x09E6, 0x0AE6, 0x0B66, 0x0BE6, 0x0C66, 0x0CE6, 0x0D66)
+        val languages = listOf(
+            Language.HINDI, Language.BENGALI, Language.GUJARATI, Language.ODIA,
+            Language.TAMIL, Language.TELUGU, Language.KANNADA, Language.MALAYALAM
+        )
+        for ((lang, base) in languages.zip(digitBlocks)) {
+            for (d in 0..9) {
+                val text = (base + d).toChar().toString()
+                val decoded = BrahmicCodec.decode(BrahmicCodec.encode(text, lang))
+                assertEquals("$lang digit $d must round trip", text, decoded)
+            }
+        }
+    }
+
+    @Test
+    fun `rapid script switching across all 10 languages stays lossless`() {
+        // Every adjacent pair forces an actual script switch so the opcode path
+        // is exercised across the whole wire alphabet.
+        val segments = listOf(
+            Language.HINDI to "अ",
+            Language.MARATHI to "म",
+            Language.BENGALI to "ক",
+            Language.GUJARATI to "ક",
+            Language.ODIA to "କ",
+            Language.TAMIL to "க",
+            Language.TELUGU to "క",
+            Language.KANNADA to "ಕ",
+            Language.MALAYALAM to "ക",
+            Language.ENGLISH to "A"
+        )
+        for (i in segments.indices) {
+            for (j in segments.indices) {
+                if (i == j) continue
+                val text = segments[i].second + segments[j].second
+                val decoded = BrahmicCodec.decode(BrahmicCodec.encode(text, segments[i].first))
+                assertEquals("switch ${segments[i].first}->${segments[j].first}", text, decoded)
+            }
+        }
+    }
+
+    @Test
+    fun `seeded fuzz across scripts keeps the codec lossless`() {
+        // Whole-code-point items (emojis are full surrogate pairs) so the pool
+        // can never manufacture a lone high surrogate.
+        val pool = listOf(
+            "अ", "आ", "इ", "ई", "उ", "क", "ख", "ग", "म", "न", "स", "ह",
+            "ा", "ि", "ी", "ु", "ू", "े", "ै", "ो", "ौ", "ं", "ः", "्", "।",
+            "অ", "আ", "ই", "ঈ", "উ", "ক", "খ", "গ", "ম", "ন", "ঃ", "্",
+            "અ", "આ", "ઇ", "ઈ", "ઉ", "ક", "ખ", "ગ", "મ", "ન", "ા",
+            "ଅ", "ଆ", "ଇ", "ଈ", "ଉ", "କ", "ଖ", "ଗ", "ମ", "ନ", "ା",
+            "அ", "ஆ", "இ", "ஈ", "உ", "க", "ங", "ந", "ப", "ம", "ா", "்",
+            "అ", "ఆ", "ఇ", "ఈ", "ఉ", "క", "ఖ", "గ", "మ", "న", "ా",
+            "ಅ", "ಆ", "ಇ", "ಈ", "ಉ", "ಕ", "ಖ", "ಗ", "ಮ", "ನ", "ಾ",
+            "അ", "ആ", "ഇ", "ഈ", "ഉ", "ക", "ഖ", "ഗ", "മ", "ന", "ാ",
+            "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+            "!", "?", ",", ";", ":", ".", "-", "%", "/", "(", ")", " ", "A", "z", "~",
+            "🚨", "🔥", "🚑"
+        )
+        val rng = kotlin.random.Random(0x5EED)
+        repeat(600) {
+            val sb = StringBuilder()
+            val len = 1 + rng.nextInt(48)
+            repeat(len) { sb.append(pool[rng.nextInt(pool.size)]) }
+            val text = sb.toString()
+            val lang = listOf(
+                Language.HINDI, Language.MARATHI, Language.TAMIL, Language.BENGALI,
+                Language.TELUGU, Language.GUJARATI, Language.KANNADA, Language.MALAYALAM,
+                Language.ODIA, Language.ENGLISH
+            )[rng.nextInt(10)]
+            val encoded = BrahmicCodec.encode(text, lang)
+            val decoded = BrahmicCodec.decode(encoded)
+            assertEquals("fuzz iteration $lang: $text", text, decoded)
+        }
+    }
+
+    @Test
+    fun `truncating a valid payload either returns null or a true prefix`() {
+        val valid = BrahmicCodec.encode("आपातकालीन स्थिति 🚨 Hospital Sector 4", Language.HINDI)
+        val full = BrahmicCodec.decode(valid)!!
+        for (cut in 0 until valid.size) {
+            val truncated = valid.copyOf(cut)
+            // decode must be total (never throw) for any truncation, and any
+            // partial output must be a strict prefix of the full message.
+            val result = BrahmicCodec.decode(truncated)
+            if (result != null) {
+                assertTrue(
+                    "cut=$cut must yield a prefix of the message, not fabricated content",
+                    full.startsWith(result)
+                )
+            }
+        }
+        assertEquals(null, BrahmicCodec.decode(valid.copyOf(5)))
+        assertEquals(null, BrahmicCodec.decode(valid.copyOf(0)))
+    }
+
     @Test
     fun `brahmic compression ratio benchmark vs UTF-8 across all 10 languages`() {
         val testCorpus = listOf(

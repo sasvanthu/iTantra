@@ -70,7 +70,8 @@ import java.util.concurrent.atomic.AtomicLong
  * frames across whatever edges are connected then.
  */
 class MeshTransportEngine(
-    private val maxTtl: Int = MeshRouter.DEFAULT_MAX_TTL
+    private val maxTtl: Int = MeshRouter.DEFAULT_MAX_TTL,
+    private val storeAndForwardQueue: StoreAndForwardQueue = StoreAndForwardQueue()
 ) : TransportEngine {
 
     override val transportType: TransportType = TransportType.MESH
@@ -107,7 +108,7 @@ class MeshTransportEngine(
     val relayStats: StateFlow<MeshRelayStats> = _relayStats.asStateFlow()
 
     /** Store-and-forward retention while no destination edge is reachable. */
-    private val storeForwardQueue = StoreAndForwardQueue()
+    private val storeForwardQueue = storeAndForwardQueue
 
     private val _storeForwardStats = MutableStateFlow(StoreForwardStats())
     /** QUEUED / FORWARDED / EXPIRED / DROPPED counters for the relay panel. */

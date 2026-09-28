@@ -2,6 +2,7 @@ package com.example.itantra
 
 import android.content.Context
 import com.example.itantra.codec.*
+import com.example.itantra.dispatch.SemanticDispatchRouter
 import com.example.itantra.metrics.MetricsEngine
 import com.example.itantra.ops.LowPowerController
 import com.example.itantra.protocol.Packetizer
@@ -22,7 +23,8 @@ class SpeechPipeline(
     private val speechCodec: SpeechCodec,
     private val transport: TransportEngine,
     private val metricsEngine: MetricsEngine,
-    private val lowPowerController: LowPowerController? = null
+    private val lowPowerController: LowPowerController? = null,
+    private val semanticRouter: SemanticDispatchRouter? = null
 ) {
 
     companion object {
@@ -97,7 +99,10 @@ class SpeechPipeline(
         val isEmergency: Boolean,
         val failed: Boolean,
         val detail: String,
-        val overNetwork: Boolean
+        val overNetwork: Boolean,
+        val semanticDomain: String? = null,
+        val semanticIntent: String? = null,
+        val semanticCritical: Boolean = false
     )
 
     fun setLanguage(language: Language) {
@@ -179,7 +184,15 @@ class SpeechPipeline(
         val encodeMs = (System.nanoTime() - encodeStart) / 1_000_000L
         metricsEngine.recordEncodingLatency(encodeMs)
 
-        val effectiveEmergency = isEmergency || encoded.importance == Importance.CRITICAL
+        // Semantic dispatch enrichment: any CRITICAL SUTRA intent (e.g. a
+        // "trapped / fire / flood" parse) refines emergency even when the text
+        // carrier did not carry an explicit emergency marker.
+        val semanticRoute = semanticRouter?.route(text, language)
+        val effectiveEmergency = isEmergency || encoded.importance == Importance.CRITICAL ||
+            semanticRoute?.isCriticalIntent == true
+        val semanticDomain = semanticRoute?.sutra?.domain?.name
+        val semanticIntent = semanticRoute?.sutra?.intent?.name
+        android.util.Log.i(TAG, "[SUTRA] semantic=${semanticDomain}:${semanticIntent} critical=${semanticRoute?.isCriticalIntent} (emergency=$effectiveEmergency)")
         android.util.Log.i(TAG, "[TEXT] Sending text: \"$text\" (lang=$language, emergency=$effectiveEmergency, importance=${encoded.importance})")
         android.util.Log.i(TAG, "[CODEC] Encoded ${encoded.originalUtf8Size}B UTF-8 -> ${encoded.finalEncodedSize}B binary (${String.format("%.1f", encoded.compressionPercentage)}% ratio) in ${encodeMs}ms")
         metricsEngine.recordSizeMetrics(
@@ -229,7 +242,10 @@ class SpeechPipeline(
                     isEmergency = effectiveEmergency,
                     failed = true,
                     detail = "deferred by power governor (${lowPowerController.profile.name})",
-                    overNetwork = true
+                    overNetwork = true,
+                    semanticDomain = semanticDomain,
+                    semanticIntent = semanticIntent,
+                    semanticCritical = semanticRoute?.isCriticalIntent == true
                 )
                 _pipelineState.value = _pipelineState.value.copy(
                     isProcessing = false,
@@ -268,7 +284,10 @@ class SpeechPipeline(
                 isEmergency = effectiveEmergency,
                 failed = result?.failed == true,
                 detail = result?.detail ?: "queued",
-                overNetwork = true
+                overNetwork = true,
+                semanticDomain = semanticDomain,
+                semanticIntent = semanticIntent,
+                semanticCritical = semanticRoute?.isCriticalIntent == true
             )
         } else {
             // No peer: verify the local STT->codec->packet->decode path.
@@ -306,7 +325,10 @@ class SpeechPipeline(
                 isEmergency = effectiveEmergency,
                 failed = !loopback.exactMatch,
                 detail = if (loopback.exactMatch) "local round-trip exact" else "local decode mismatch",
-                overNetwork = false
+                overNetwork = false,
+                semanticDomain = semanticDomain,
+                semanticIntent = semanticIntent,
+                semanticCritical = semanticRoute?.isCriticalIntent == true
             )
         }
 

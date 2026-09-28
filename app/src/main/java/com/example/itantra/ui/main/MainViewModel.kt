@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.itantra.*
 import com.example.itantra.codec.*
 import com.example.itantra.data.*
+import com.example.itantra.dispatch.SemanticDispatchRouter
 import com.example.itantra.metrics.MetricsEngine
 import com.example.itantra.ops.EmergencyController
 import com.example.itantra.ops.LowPowerController
@@ -112,7 +113,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val wifiTransport = WifiTransportEngine(networkSimulator)
     private val simulatedTransport = SimulatedTransport(networkSimulator)
     private val bleTransport = BleTransportEngine(application, networkSimulator)
-    private val meshTransport = MeshTransportEngine()
+    private val meshTransport = MeshTransportEngine(
+        // Persistent DTN: queued undeliverable messages survive process restarts.
+        storeAndForwardQueue = StoreAndForwardQueue(storageDir = File(app.filesDir, "dtn"))
+    )
     private val adaptiveVoiceTransport = AdaptiveVoiceTransport(
         primaryEngineProvider = { activeEngine() },
         wifiTransport = wifiTransport,
@@ -455,7 +459,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             speechCodec = currentCodec(),
             transport = adaptiveVoiceTransport,
             metricsEngine = app.metricsEngine,
-            lowPowerController = lowPowerController
+            lowPowerController = lowPowerController,
+            semanticRouter = SemanticDispatchRouter()
         )
         speechPipeline?.loopbackHandler = { text, lang -> currentCodec().performLab(text, lang) }
         speechPipeline?.setLanguage(_uiState.value.currentLanguage)

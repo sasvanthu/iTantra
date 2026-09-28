@@ -3,14 +3,47 @@ package com.example.itantra.speech.stt
 import com.example.itantra.codec.Language
 
 /**
- * Individual token with confidence and stability flag.
+ * Token-level flags that downstream compression must never silently drop.
+ * Negations, quantities, names, locations and safety-critical entities are
+ * preserved even under aggressive compression.
+ */
+object AsrTokenFlags {
+    const val FLAG_NONE: Int = 0x00
+    /** Low-confidence token; must not be transmitted as final truth. */
+    const val FLAG_UNCERTAIN: Int = 0x01
+    /** Safety-critical (e.g. emergency content); never dropped by compression. */
+    const val FLAG_CRITICAL: Int = 0x02
+    /** Proper noun / named entity; never dropped by compression. */
+    const val FLAG_ENTITY: Int = 0x04
+    /** Semantic negation ("no", "not", "उसे", "இல்லை"); must never be dropped. */
+    const val FLAG_NEGATION: Int = 0x08
+    /** Quantity / numeral; must never be dropped by compression. */
+    const val FLAG_NUMBER: Int = 0x10
+    /** Location / place name; must never be dropped by compression. */
+    const val FLAG_LOCATION: Int = 0x20
+
+    fun fromConfidence(confidence: Float): Int =
+        if (confidence < 0.70f) FLAG_UNCERTAIN else FLAG_NONE
+}
+
+/**
+ * Individual token with confidence, stability and preservation flags.
  */
 data class AsrToken(
     val text: String,
     val confidence: Float,
     val isStable: Boolean,
+    val flags: Int = AsrTokenFlags.FLAG_NONE,
+    val alternatives: List<String> = emptyList(),
     val timestampMs: Long = System.currentTimeMillis()
-)
+) {
+    val isUncertainFlagged: Boolean get() = (flags and AsrTokenFlags.FLAG_UNCERTAIN) != 0
+    val isCriticalFlagged: Boolean get() = (flags and AsrTokenFlags.FLAG_CRITICAL) != 0
+    val isEntityFlagged: Boolean get() = (flags and AsrTokenFlags.FLAG_ENTITY) != 0
+    val isNegationFlagged: Boolean get() = (flags and AsrTokenFlags.FLAG_NEGATION) != 0
+    val isNumberFlagged: Boolean get() = (flags and AsrTokenFlags.FLAG_NUMBER) != 0
+    val isLocationFlagged: Boolean get() = (flags and AsrTokenFlags.FLAG_LOCATION) != 0
+}
 
 /**
  * Result produced by a [StreamingAsrEngine].
@@ -84,11 +117,26 @@ class StablePrefixTracker(
                 if (isStable) {
                     currentStable.add(token)
                 }
-                asrTokens.add(AsrToken(token, confidence = if (isStable) 0.95f else 0.65f, isStable = isStable))
+                val confidence = if (isStable) 0.95f else 0.65f
+                asrTokens.add(
+                    AsrToken(
+                        token,
+                        confidence = confidence,
+                        isStable = isStable,
+                        flags = AsrTokenFlags.fromConfidence(confidence)
+                    )
+                )
             } else {
                 tokenHistory[index] = token
                 tokenStabilityCounts[index] = 1
-                asrTokens.add(AsrToken(token, confidence = 0.50f, isStable = false))
+                asrTokens.add(
+                    AsrToken(
+                        token,
+                        confidence = 0.50f,
+                        isStable = false,
+                        flags = AsrTokenFlags.FLAG_UNCERTAIN
+                    )
+                )
             }
         }
 

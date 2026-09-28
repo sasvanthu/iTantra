@@ -53,7 +53,15 @@ data class LinkMetrics(
     var duplicatePackets: Int = 0,
     var roundTripTimeMs: Long = 0,
     var ackLatencyMs: Long = 0,
-    var lastMessageLatencyMs: Long = 0
+    var lastMessageLatencyMs: Long = 0,
+    /**
+     * Measured radio signal strength in dBm for links reporting it (BLE).
+     * `Int.MIN_VALUE` means RSSI is unavailable on this transport and the
+     * estimator must ignore it.
+     */
+    var rssiDbm: Int = Int.MIN_VALUE,
+    /** Outbound queue depth (packets waiting to be sent) at sample time. */
+    var queuedDepth: Int = 0
 )
 
 enum class MessageState {

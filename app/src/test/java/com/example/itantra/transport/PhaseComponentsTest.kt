@@ -186,6 +186,52 @@ class PhaseComponentsTest {
         assertEquals(1, sq.size)
     }
 
+    @Test
+    fun `aggregate byte budget displaces weakest low priority messages first`() {
+        val sq = StoreAndForwardQueue(maxQueueSize = 64, maxQueueBytes = 100, maxMessageBytes = 40)
+        val low = sq.enqueue(ByteArray(40), Language.ENGLISH, false, Importance.LOW.level.toByte())
+        assertTrue(low is StoreAndForwardResult.Accepted)
+        val normal = sq.enqueue(ByteArray(40), Language.ENGLISH, false, Importance.NORMAL.level.toByte())
+        assertTrue(normal is StoreAndForwardResult.Accepted)
+        // 80 bytes held; the next arrival cannot fit without evicting the LOW one.
+        val critical = sq.enqueue(ByteArray(40), Language.HINDI, true, Importance.CRITICAL.level.toByte())
+        assertTrue(critical is StoreAndForwardResult.Accepted)
+        assertEquals(2, sq.size)
+        // The LOW message was displaced to make room; NORMAL + CRITICAL remain
+        // and peekNext yields the highest surviving priority (CRITICAL first).
+        assertEquals(1L, sq.stats.value.dropped)
+        val first = sq.peekNext()
+        assertNotNull(first)
+        assertEquals(Importance.CRITICAL.level.toByte(), first!!.priority)
+        assertTrue(sq.markForwarded(first))
+        val second = sq.peekNext()
+        assertNotNull(second)
+        assertEquals(Importance.NORMAL.level.toByte(), second!!.priority)
+    }
+
+    @Test
+    fun `aggregate byte budget drops an arrival that nothing can make room for`() {
+        val sq = StoreAndForwardQueue(maxQueueSize = 64, maxQueueBytes = 100, maxMessageBytes = 1000)
+        val fill = sq.enqueue(ByteArray(100), Language.ENGLISH, false, Importance.HIGH.level.toByte())
+        assertTrue(fill is StoreAndForwardResult.Accepted)
+        assertEquals(1, sq.size)
+        val tooBig = sq.enqueue(ByteArray(1), Language.HINDI, false, Importance.NORMAL.level.toByte())
+        assertTrue(
+            "arrival cannot displace an equal-or-higher priority occupant",
+            tooBig is StoreAndForwardResult.Dropped
+        )
+        assertEquals(1, sq.stats.value.dropped)
+        assertEquals(1, sq.size)
+    }
+
+    @Test
+    fun `single message larger than the per message ceiling is dropped`() {
+        val sq = StoreAndForwardQueue(maxMessageBytes = 16)
+        val result = sq.enqueue(ByteArray(17), Language.ENGLISH, false, Importance.CRITICAL.level.toByte())
+        assertTrue(result is StoreAndForwardResult.Dropped)
+        assertEquals(0, sq.size)
+    }
+
     // ------------------------------------------------------------------
     // AdaptiveLinkGovernor
     // ------------------------------------------------------------------
@@ -225,7 +271,8 @@ class PhaseComponentsTest {
     @Test
     fun `clean link opens up to the big payload ceiling`() {
         val g = AdaptiveLinkGovernor()
-        g.observe(metrics(0))
+        // Hysteresis: mode commits only after a run of identical samples.
+        repeat(AdaptiveLinkGovernor.DEFAULT_HYSTERESIS_SAMPLES) { g.observe(metrics(0)) }
         assertEquals(AdaptiveBandwidth.BandwidthMode.HIGH_BANDWIDTH, g.mode())
         assertEquals(AdaptiveLinkGovernor.HIGH_MAX_PAYLOAD, g.maxPayload())
     }
@@ -233,19 +280,69 @@ class PhaseComponentsTest {
     @Test
     fun `high rtt alone degrades the link honestly`() {
         val g = AdaptiveLinkGovernor()
-        g.observe(LinkMetrics(packetLoss = 0, roundTripTimeMs = 700, retransmissions = 0))
+        repeat(AdaptiveLinkGovernor.DEFAULT_HYSTERESIS_SAMPLES) {
+            g.observe(LinkMetrics(packetLoss = 0, roundTripTimeMs = 700, retransmissions = 0))
+        }
         assertEquals(AdaptiveBandwidth.BandwidthMode.LOW_BANDWIDTH, g.mode())
         assertEquals(AdaptiveLinkGovernor.LOW_MAX_PAYLOAD, g.maxPayload())
     }
 
     @Test
+    fun `hysteresis requires a run of consistent samples before committing`() {
+        val g = AdaptiveLinkGovernor(hysteresisSamples = 3)
+        g.observe(metrics(0))
+        // A single good sample must NOT reopen a degraded link.
+        g.observe(metrics(90))
+        // A single bad sample must NOT collapse a clean link either.
+        val mid = AdaptiveLinkGovernor()
+        mid.observe(metrics(90))
+        assertEquals(AdaptiveBandwidth.BandwidthMode.NORMAL, mid.mode())
+        repeat(2) { mid.observe(metrics(90)) }
+        assertEquals(AdaptiveBandwidth.BandwidthMode.EMERGENCY, mid.mode())
+        assertTrue(mid.modeSwitchCount() > 0)
+    }
+
+    @Test
+    fun `weak rssi and deep queue make the link conservatively degrade`() {
+        val g = AdaptiveLinkGovernor()
+        // Clean loss/RTT but a very weak radio: estimator must drop to DEGRADED.
+        repeat(AdaptiveLinkGovernor.DEFAULT_HYSTERESIS_SAMPLES) {
+            g.observe(LinkMetrics(
+                packetLoss = 0,
+                roundTripTimeMs = 40,
+                retransmissions = 0,
+                rssiDbm = -95
+            ))
+        }
+        assertEquals(AdaptiveLinkGovernor.EMERGENCY_MAX_PAYLOAD, g.maxPayload())
+        assertEquals(AdaptiveLinkGovernor.LinkHealth.CRITICAL, g.health())
+
+        val q = AdaptiveLinkGovernor()
+        repeat(AdaptiveLinkGovernor.DEFAULT_HYSTERESIS_SAMPLES) {
+            q.observe(LinkMetrics(packetLoss = 0, roundTripTimeMs = 40, queuedDepth = 48))
+        }
+        assertEquals(AdaptiveLinkGovernor.LOW_MAX_PAYLOAD, q.maxPayload())
+        assertEquals(AdaptiveLinkGovernor.LinkHealth.DEGRADED, q.health())
+    }
+
+    @Test
+    fun `link health is unknown until the first sample`() {
+        val g = AdaptiveLinkGovernor()
+        assertEquals(AdaptiveLinkGovernor.LinkHealth.UNKNOWN, g.health())
+        assertFalse(g.hasSamples())
+        g.observe(metrics(0))
+        assertTrue(g.hasSamples())
+    }
+
+    @Test
     fun `governor reset returns to the nominal ceiling`() {
         val g = AdaptiveLinkGovernor()
-        g.observe(metrics(90))
+        repeat(AdaptiveLinkGovernor.DEFAULT_HYSTERESIS_SAMPLES) { g.observe(metrics(90)) }
         assertEquals(AdaptiveLinkGovernor.EMERGENCY_MAX_PAYLOAD, g.maxPayload())
         g.reset()
         assertEquals(AdaptiveBandwidth.BandwidthMode.NORMAL, g.mode())
         assertEquals(AdaptiveLinkGovernor.NORMAL_MAX_PAYLOAD, g.maxPayload())
+        assertEquals(0, g.modeSwitchCount())
     }
 
     @Test
