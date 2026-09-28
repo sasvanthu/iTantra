@@ -77,6 +77,214 @@ fun SettingsScreen(viewModel: MainViewModel) {
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        // ------------------------------------------------------------------
+        // DEVICE PAIRING: out-of-band AES-256 session key sharing.
+        // Must be done on both phones before a packet can be decrypted.
+        // ------------------------------------------------------------------
+        SettingsSection("DEVICE PAIRING (AES-256 SESSION KEY)") {
+            val keyState by viewModel.sessionKeyState.collectAsState()
+            var codeInput by remember { mutableStateOf("") }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(if (keyState.isPaired) RetroSurfaceVariant else RetroSurface)
+                    .border(
+                        1.dp,
+                        if (keyState.isPaired) RetroGreen else RetroOrange,
+                        RoundedCornerShape(4.dp)
+                    )
+                    .padding(12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = if (keyState.isPaired) "PAIRED" else "NOT PAIRED",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (keyState.isPaired) RetroGreen else RetroOrange
+                )
+                Text(
+                    text = if (keyState.persisted) "KEYSTORE" else "VOLATILE",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 9.sp,
+                    color = RetroGray
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = keyState.notice,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+                color = RetroGray
+            )
+
+            if (keyState.fingerprint.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "KEY FINGERPRINT (compare on both phones):",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    color = RetroGray
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = keyState.fingerprint,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = RetroCyan
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Text(
+                text = "PHONE A - generate code:",
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+                color = RetroGray
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(RetroSurface)
+                    .clickable {
+                        viewModel.generatePairingCode()
+                        codeInput = ""
+                    }
+                    .padding(12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "GENERATE PAIRING CODE",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = RetroAmber
+                )
+                Text(
+                    text = "→",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 14.sp,
+                    color = RetroAmber
+                )
+            }
+
+            val generated = keyState.pairingCode
+            if (generated != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "READ THIS TO PHONE B:",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    color = RetroGreen
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = generated,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    color = RetroGreen
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Text(
+                text = "PHONE B - paste code:",
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+                color = RetroGray
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            OutlinedTextField(
+                value = codeInput,
+                onValueChange = { codeInput = it.uppercase() },
+                modifier = Modifier.fillMaxWidth(),
+                textStyle = androidx.compose.ui.text.TextStyle(
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    color = RetroCyan
+                ),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = RetroAmber,
+                    unfocusedBorderColor = RetroDarkGray
+                ),
+                singleLine = true,
+                placeholder = {
+                    Text(
+                        text = "SETU-XXXX-...",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        color = RetroDarkGray
+                    )
+                }
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(RetroSurface)
+                    .clickable(enabled = codeInput.isNotBlank()) { viewModel.adoptPairingCode(codeInput) }
+                    .padding(12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "ADOPT PAIRING CODE",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (codeInput.isBlank()) RetroDarkGray else RetroAmber
+                )
+                Text(
+                    text = "→",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 14.sp,
+                    color = if (codeInput.isBlank()) RetroDarkGray else RetroAmber
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Out-of-band pairing only. The code IS the key - anyone who reads it can decrypt traffic. No ECDH key exchange is implemented.",
+                fontFamily = FontFamily.Monospace,
+                fontSize = 9.sp,
+                color = RetroOrange
+            )
+
+            if (keyState.isPaired) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(RetroSurface)
+                        .clickable { viewModel.forgetPairing() }
+                        .padding(12.dp),
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Text(
+                        text = "CLEAR PAIRING",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        color = RetroOrange
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
         // Network simulation
         SettingsSection("NETWORK SIMULATION (DEBUG)") {
             if (uiState.simulationEnabled) {

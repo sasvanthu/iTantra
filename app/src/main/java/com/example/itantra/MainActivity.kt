@@ -106,6 +106,59 @@ class MainActivity : ComponentActivity() {
                     val m = s.linkMetrics
                     Log.i("iTantraTest", "STATUS: role=${s.role}, isServer=${s.isServer}, isConnected=${s.isConnected}, status=${s.connectionStatus}, subStatus=${s.subStatusLabel}, ip=${s.ipAddress}, port=${s.port}, remote=${s.remoteDeviceId}, mode=${s.transportMode}, voiceRoute=${s.voiceTransportRoute}, ptt=${s.isPTTMode}, emergency=${s.emergencyActive}, pktsSent=${m.packetsSent}, pktsRecv=${m.packetsReceived}, rtt=${m.roundTripTimeMs}, retr=${m.retransmissions}, txB=${m.transmittedBytes}, rxB=${m.receivedBytes}, dup=${m.duplicatePackets}, corrupted=${m.corruptedFrames}")
                 }
+
+                // ------------------------------------------------------------------
+                // SETU PROTOTYPE ACCEPTANCE HARNESS
+                // Lets run_setu_acceptance_test.ps1 drive pairing, security and
+                // multi-hop checks over adb with no manual UI interaction.
+                // ------------------------------------------------------------------
+                "GENERATE_PAIRING_CODE" -> {
+                    val code = vm.generatePairingCode()
+                    if (code != null && BuildConfig.DEBUG) {
+                        // Debug builds only: logcat is readable over adb, so this
+                        // exposes the session key to anyone attached to the device.
+                        Log.i("iTantraTest", "PAIRING_CODE: $code")
+                    }
+                }
+                "ADOPT_PAIRING_CODE" -> {
+                    val code = intent.getStringExtra("code") ?: ""
+                    val ok = vm.adoptPairingCode(code)
+                    Log.i("iTantraTest", "PAIRING_ADOPT: ${if (ok) "OK" else "FAILED"}")
+                }
+                "GET_PAIRING_STATUS" -> {
+                    val k = vm.sessionKeyState.value
+                    Log.i("iTantraTest", "PAIRING_STATUS: paired=${k.isPaired}, source=${k.source}, fingerprint=${k.fingerprint}, persisted=${k.persisted}, notice=${k.notice}")
+                }
+                "CLEAR_PAIRING" -> {
+                    vm.forgetPairing()
+                    Log.i("iTantraTest", "PAIRING_CLEARED")
+                }
+                "RUN_SECURITY_TEST" -> {
+                    vm.runSecurityTest()
+                }
+                "RUN_MULTIHOP" -> {
+                    val text = intent.getStringExtra("text")
+                    if (!text.isNullOrBlank()) vm.setManualText(text)
+                    vm.runMultiHopSimulation()
+                }
+                "TEST_DUPLICATE" -> {
+                    vm.testMultiHopDuplicate()
+                    Log.i("iTantraTest", "DUPLICATE_TEST: dispatched")
+                }
+                "GET_EVENTS" -> {
+                    val events = com.example.itantra.telemetry.CommunicationEventLog.events.value
+                    Log.i("iTantraTest", "EVENT_COUNT: ${events.size}")
+                    events.takeLast(40).forEach { e ->
+                        Log.i(
+                            "iTantraTest",
+                            "EVENT: ${e.formattedTime()} | ${e.device}${e.destinationDevice?.let { "->$it" } ?: ""} | ${e.eventType} | ${e.transport} | ${e.transmissionId} | ${e.messageId} | ${e.packetId} | ${e.detail}"
+                        )
+                    }
+                }
+                "CLEAR_EVENTS" -> {
+                    vm.clearEventLogs()
+                    Log.i("iTantraTest", "EVENTS_CLEARED")
+                }
             }
         }
     }

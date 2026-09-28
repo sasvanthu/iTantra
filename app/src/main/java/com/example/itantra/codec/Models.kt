@@ -19,6 +19,34 @@ enum class Language(val code: String, val displayName: String, val wireByte: Byt
         fun fromCode(code: String): Language =
             codeMap[code] ?: UNKNOWN
 
+        /**
+         * Resolves a BCP-47 style tag to a [Language].
+         *
+         * Setu packets carry tags like `ta-IN` / `hi-IN` / `en-IN`, while the
+         * codec wire format uses the bare ISO-639-1 code. Splitting on the
+         * region subtag keeps the two representations in sync instead of
+         * silently degrading every packet to [UNKNOWN].
+         */
+        fun fromBcp47(tag: String): Language {
+            val normalized = tag.trim().lowercase()
+            if (normalized.isEmpty()) return UNKNOWN
+
+            val direct = fromCode(normalized)
+            if (direct != UNKNOWN) return direct
+
+            val base = normalized.substringBefore('-').substringBefore('_')
+            return fromCode(base)
+        }
+
+        /**
+         * Renders this language as the BCP-47 tag used in Setu packet metadata
+         * and displayed in the UI.
+         */
+        fun toBcp47(language: Language): String = when (language) {
+            ENGLISH -> "en-IN"
+            else -> "${language.code}-IN"
+        }
+
         /** Wire bytes are append-only: existing builds on the air keep their
          * codes while newer ten-language builds add 0x04..0x0A. */
         fun fromByte(b: Byte): Language =

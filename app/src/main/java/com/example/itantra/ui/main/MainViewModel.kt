@@ -24,6 +24,7 @@ import com.example.itantra.protocol.IdGenerator
 import com.example.itantra.protocol.SetuPacket
 import com.example.itantra.security.CryptoEngine
 import com.example.itantra.security.SecurityStatus
+import com.example.itantra.security.SessionKeyManager
 import com.example.itantra.telemetry.CommunicationEventLog
 import com.example.itantra.mesh.MultiHopRelayEngine
 import kotlinx.coroutines.CompletableDeferred
@@ -47,6 +48,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val multiHopRelayEngine = MultiHopRelayEngine()
     val transportManager by lazy { TransportManager(bleTransport, wifiTransport) }
+
+    /**
+     * Shared AES-256 session key lifecycle. Sourced from the Application so the
+     * paired key is restored from the Android Keystore exactly once per process.
+     */
+    val sessionKeyManager: SessionKeyManager get() = app.sessionKeyManager
+    val sessionKeyState: StateFlow<SessionKeyManager.KeyState> get() = app.sessionKeyManager.state
 
     private val sttEngine = HybridSTTEngine()
     private val ttsEngine = TTSRegistry.createEngine(preferOpenSource = true)
@@ -72,7 +80,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (raw < 0) 100 else raw.coerceAtMost(100)
     }
 
-    /** Phase 22: model presence probe — a file really on this device. An STT
+    /** Phase 22: model presence probe â€” a file really on this device. An STT
      *  model counts as present exactly when VoskSTTEngine can load it: either an
      *  unpacked dir at filesDir/models/<code>/ or a zip at filesDir/stt-<LANG>.zip.
      *  No open-source TTS voices are bundled, so TTS entries are always absent. */
@@ -218,8 +226,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val audioPermissionGranted: Boolean = true,
         val blePermissionGranted: Boolean = true,
         val currentTxId: String = "TX-STANDBY",
-        val currentMsgId: String = "MSG-—",
-        val currentPktId: String = "PKT-—",
+        val currentMsgId: String = "MSG-â€”",
+        val currentPktId: String = "PKT-â€”",
         val lastSecurePacket: SetuPacket? = null,
         val securityReport: SecurityStatus.SecurityTestReport? = null,
         val multiHopState: MultiHopRelayEngine.MultiHopState = MultiHopRelayEngine.MultiHopState(),
@@ -230,11 +238,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val micStatus: String = "IDLE (PERMISSION OK)",
         val sttStatus: String = "READY",
         val selectedLanguage: String = "ENGLISH",
-        val recognizedText: String = "—",
+        val recognizedText: String = "â€”",
         val inputDurationMs: Long = 0L,
         val sttLatencyMs: Long = 0L,
-        val codecSizeSummary: String = "—",
-        val decodedText: String = "—",
+        val codecSizeSummary: String = "â€”",
+        val decodedText: String = "â€”",
         val ttsStatus: String = "READY (OPEN-SOURCE EMBEDDED)",
         val ttsStartLatencyMs: Long = 0L,
         val isRunningTest: Boolean = false
@@ -244,7 +252,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val stepNumber: Int,
         val title: String,
         val description: String,
-        val value: String = "—",
+        val value: String = "â€”",
         val status: String = "PENDING", // PENDING, ACTIVE, PASS, FAIL
         val isSimulation: Boolean = false
     )
@@ -253,7 +261,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val currentStep: Int = 0,
         val isRunning: Boolean = false,
         val isEmergency: Boolean = false,
-        val overallStatus: String = "READY — Tap 'RUN 10-STEP SEQUENCE' or 'STEP NEXT'",
+        val overallStatus: String = "READY â€” Tap 'RUN 10-STEP SEQUENCE' or 'STEP NEXT'",
         val steps: List<DemoStepInfo> = initialDemoSteps(),
         val error: String? = null
     )
@@ -604,12 +612,12 @@ private suspend fun observeLinkMetrics(engine: TransportEngine) {
                     _uiState.update {
                         it.copy(
                             linkError = null,
-                            linkStatusLine = "● LINK ESTABLISHED → ${ev.session.remoteDeviceId}",
+                            linkStatusLine = "â— LINK ESTABLISHED â†’ ${ev.session.remoteDeviceId}",
                             ipAddress = engine.getLocalAddress()
                         )
                     }
                     pushActivity(ActivityKind.LINK, "LINK UP",
-                        "${ev.session.sessionId} vs ${ev.session.protocolVersion} · epoch ${ev.session.epoch}")
+                        "${ev.session.sessionId} vs ${ev.session.protocolVersion} Â· epoch ${ev.session.epoch}")
                 }
                 is LinkMessageEvent.Disconnected -> {
                     _uiState.update {
@@ -622,10 +630,10 @@ private suspend fun observeLinkMetrics(engine: TransportEngine) {
                         if (ev.failed) ActivityKind.ALERT else ActivityKind.TX,
                         "TX #${ev.messageId}",
                         buildString {
-                            append("${ev.packetCount} pkts · ${ev.transmittedBytes} B")
-                            if (ev.retransmissions > 0) append(" · ${ev.retransmissions} retr")
-                            if (ev.roundTripTimeMs > 0) append(" · ${ev.roundTripTimeMs} ms")
-                            if (ev.failed) append(" · FAILED")
+                            append("${ev.packetCount} pkts Â· ${ev.transmittedBytes} B")
+                            if (ev.retransmissions > 0) append(" Â· ${ev.retransmissions} retr")
+                            if (ev.roundTripTimeMs > 0) append(" Â· ${ev.roundTripTimeMs} ms")
+                            if (ev.failed) append(" Â· FAILED")
                         }
                     )
                 }
@@ -634,8 +642,8 @@ private suspend fun observeLinkMetrics(engine: TransportEngine) {
                         if (ev.isEmergency) ActivityKind.ALERT else ActivityKind.RX,
                         "RX #${ev.messageId}",
                         buildString {
-                            append("${ev.dataPackets} pkts · ${ev.payloadBytes} B")
-                            if (ev.isEmergency) append(" · EMERGENCY")
+                            append("${ev.dataPackets} pkts Â· ${ev.payloadBytes} B")
+                            if (ev.isEmergency) append(" Â· EMERGENCY")
                         }
                     )
                 }
@@ -787,7 +795,7 @@ private suspend fun observeLinkMetrics(engine: TransportEngine) {
             senderId = activeEngine().getDeviceId(),
             receiverId = _uiState.value.remoteDeviceId.ifEmpty { "PEER" },
             transport = _uiState.value.transportMode.name,
-            language = lang.code,
+            language = Language.toBcp47(lang),
             transmissionId = txId,
             messageId = msgId,
             priority = "NORMAL"
@@ -829,7 +837,7 @@ private suspend fun observeLinkMetrics(engine: TransportEngine) {
             senderId = activeEngine().getDeviceId(),
             receiverId = _uiState.value.remoteDeviceId.ifEmpty { "PEER" },
             transport = _uiState.value.transportMode.name,
-            language = lang.code,
+            language = Language.toBcp47(lang),
             transmissionId = txId,
             messageId = msgId,
             priority = "CRITICAL"
@@ -866,6 +874,36 @@ private suspend fun observeLinkMetrics(engine: TransportEngine) {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Device pairing: out-of-band AES-256 session key sharing.
+    // Without this step each device holds a different random key and no packet
+    // can be decrypted by the peer, so the pairing panel gates the demo.
+    // -----------------------------------------------------------------------
+
+    /**
+     * Generates a session key on this device and returns the pairing code for
+     * the operator to read to the peer. Result is surfaced through
+     * [sessionKeyState]; the code is never written to the event log.
+     */
+    fun generatePairingCode(): String? {
+        val result = sessionKeyManager.generateAndShowCode()
+        return when (result) {
+            is SessionKeyManager.PairingCodeResult.Success -> result.pairingCode
+            is SessionKeyManager.PairingCodeResult.Failure -> null
+        }
+    }
+
+    /** Adopts a pairing code generated on the peer device. */
+    fun adoptPairingCode(code: String): Boolean {
+        val result = sessionKeyManager.adoptPairingCode(code)
+        return result is SessionKeyManager.PairingCodeResult.Success
+    }
+
+    /** Clears the paired key and returns this device to an ephemeral key. */
+    fun forgetPairing() {
+        sessionKeyManager.forgetPairing()
+    }
+
     fun runMultiHopSimulation() {
         viewModelScope.launch {
             val text = _manualText.value.ifBlank { "Water and medical supplies required at Campus Quad" }
@@ -897,7 +935,7 @@ private suspend fun observeLinkMetrics(engine: TransportEngine) {
     /**
      * Phase 13: publish the instantly-available preview stage with its real,
      * measured quality versus the full message. Both numbers come from the
-     * actual message text — never from a model of quality.
+     * actual message text â€” never from a model of quality.
      */
     private fun recordProgressiveStage(text: String) {
         val plan = ProgressiveTransmission.plan(text.toByteArray(Charsets.UTF_8).size)
@@ -917,7 +955,7 @@ private suspend fun observeLinkMetrics(engine: TransportEngine) {
             android.Manifest.permission.RECORD_AUDIO
         ) == android.content.pm.PackageManager.PERMISSION_GRANTED
         if (!hasMicPermission) {
-            _uiState.update { it.copy(linkError = "RECORD_AUDIO PERMISSION REQUIRED — grant in phone settings") }
+            _uiState.update { it.copy(linkError = "RECORD_AUDIO PERMISSION REQUIRED â€” grant in phone settings") }
             return
         }
         val started = speechPipeline?.startListening() ?: false
@@ -1146,9 +1184,9 @@ private suspend fun observeLinkMetrics(engine: TransportEngine) {
     fun testSentence(language: Language) {
         val sentence = when (language) {
             Language.ENGLISH -> "I need help."
-            Language.HINDI -> "मुझे मदद चाहिए।"
-            Language.TAMIL -> "எனக்கு உதவி தேவை."
-            // P21 languages: community translations pending — fall back to the
+            Language.HINDI -> "à¤®à¥à¤à¥‡ à¤®à¤¦à¤¦ à¤šà¤¾à¤¹à¤¿à¤à¥¤"
+            Language.TAMIL -> "à®Žà®©à®•à¯à®•à¯ à®‰à®¤à®µà®¿ à®¤à¯‡à®µà¯ˆ."
+            // P21 languages: community translations pending â€” fall back to the
             // English template rather than emitting an empty or fake phrase.
             else -> "I need help."
         }
@@ -1245,7 +1283,7 @@ private suspend fun observeLinkMetrics(engine: TransportEngine) {
                     currentStep = 0,
                     isRunning = false,
                     isEmergency = false,
-                    overallStatus = "READY — Tap 'RUN 10-STEP SEQUENCE' or 'STEP NEXT'",
+                    overallStatus = "READY â€” Tap 'RUN 10-STEP SEQUENCE' or 'STEP NEXT'",
                     steps = initialDemoSteps(),
                     error = null
                 )
@@ -1331,8 +1369,8 @@ private suspend fun observeLinkMetrics(engine: TransportEngine) {
         try {
             val lang = _uiState.value.currentLanguage
             val sampleText = when (lang) {
-                Language.HINDI -> if (isEmergency) "आपातकालीन चेतावनी: तुरंत सहायता की आवश्यकता है" else "सुरक्षित मार्ग 4 खुला है, सभी को सूचित करें"
-                Language.TAMIL -> if (isEmergency) "அவசர எச்சரிக்கை: உடனடி உதவி தேவைப்படுகிறது" else "பாதுகாப்பான வழி எண் 4 தயாராக உள்ளது"
+                Language.HINDI -> if (isEmergency) "à¤†à¤ªà¤¾à¤¤à¤•à¤¾à¤²à¥€à¤¨ à¤šà¥‡à¤¤à¤¾à¤µà¤¨à¥€: à¤¤à¥à¤°à¤‚à¤¤ à¤¸à¤¹à¤¾à¤¯à¤¤à¤¾ à¤•à¥€ à¤†à¤µà¤¶à¥à¤¯à¤•à¤¤à¤¾ à¤¹à¥ˆ" else "à¤¸à¥à¤°à¤•à¥à¤·à¤¿à¤¤ à¤®à¤¾à¤°à¥à¤— 4 à¤–à¥à¤²à¤¾ à¤¹à¥ˆ, à¤¸à¤­à¥€ à¤•à¥‹ à¤¸à¥‚à¤šà¤¿à¤¤ à¤•à¤°à¥‡à¤‚"
+                Language.TAMIL -> if (isEmergency) "à®…à®µà®šà®° à®Žà®šà¯à®šà®°à®¿à®•à¯à®•à¯ˆ: à®‰à®Ÿà®©à®Ÿà®¿ à®‰à®¤à®µà®¿ à®¤à¯‡à®µà¯ˆà®ªà¯à®ªà®Ÿà¯à®•à®¿à®±à®¤à¯" else "à®ªà®¾à®¤à¯à®•à®¾à®ªà¯à®ªà®¾à®© à®µà®´à®¿ à®Žà®£à¯ 4 à®¤à®¯à®¾à®°à®¾à®• à®‰à®³à¯à®³à®¤à¯"
                 else -> if (isEmergency) "CRITICAL SOS: MEDICAL ASSISTANCE REQUIRED AT ROUTE 4" else "EVACUATION NEEDED: 27 INJURED, ROUTE 4N1 BLOCKED"
             }
 
@@ -1363,7 +1401,7 @@ private suspend fun observeLinkMetrics(engine: TransportEngine) {
                         receiverId = "PHONE_C",
                         originalSenderId = "PHONE_A",
                         transport = if (_uiState.value.transportMode == TransportType.BLUETOOTH) "BLUETOOTH" else "WIFI",
-                        language = lang.code,
+                        language = Language.toBcp47(lang),
                         transmissionId = txId,
                         messageId = msgId,
                         sequenceNumber = 1,
@@ -1390,7 +1428,7 @@ private suspend fun observeLinkMetrics(engine: TransportEngine) {
                         plaintext = currentCodec().encode(sampleText, lang).data,
                         senderId = "PHONE_A",
                         receiverId = "PHONE_C",
-                        language = lang.code,
+                        language = Language.toBcp47(lang),
                         priority = if (isEmergency) "CRITICAL" else "NORMAL",
                         key = CryptoEngine.getSessionKey()
                     )
@@ -1415,14 +1453,14 @@ private suspend fun observeLinkMetrics(engine: TransportEngine) {
                         transmissionId = currentPkt.transmissionId,
                         messageId = currentPkt.messageId,
                         packetId = currentPkt.packetId,
-                        detail = "AES-256-GCM Verified ✓ (Tamper Attack: Blocked=$tamperBlocked)"
+                        detail = "AES-256-GCM Verified âœ“ (Tamper Attack: Blocked=$tamperBlocked)"
                     )
-                    resultValue = "AES-256-GCM Auth: VALIDATED ✓ | Tamper Attack: ${if (tamperBlocked) "REJECTED (AEADBadTag) ✓" else "FAILED"} [MEASURED]"
+                    resultValue = "AES-256-GCM Auth: VALIDATED âœ“ | Tamper Attack: ${if (tamperBlocked) "REJECTED (AEADBadTag) âœ“" else "FAILED"} [MEASURED]"
                 }
                 6 -> { // MULTI-HOP RELAY (A -> B -> C)
                     val relayOk = multiHopRelayEngine.runMultiHopDemonstration(
                         messageText = sampleText,
-                        language = lang.code,
+                        language = Language.toBcp47(lang),
                         key = CryptoEngine.getSessionKey(),
                         stepDelayMs = 250L
                     )
@@ -1433,7 +1471,7 @@ private suspend fun observeLinkMetrics(engine: TransportEngine) {
                         plaintext = currentCodec().encode(sampleText, lang).data,
                         senderId = "PHONE_A",
                         receiverId = "PHONE_C",
-                        language = lang.code,
+                        language = Language.toBcp47(lang),
                         key = CryptoEngine.getSessionKey()
                     )
                     multiHopRelayEngine.testDuplicatePacketSuppression(currentPkt)

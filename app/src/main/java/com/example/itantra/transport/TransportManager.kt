@@ -1,5 +1,6 @@
 package com.example.itantra.transport
 
+import com.example.itantra.codec.Language
 import com.example.itantra.protocol.IdGenerator
 import com.example.itantra.protocol.SetuPacket
 import com.example.itantra.security.CryptoEngine
@@ -141,7 +142,7 @@ class TransportManager(
 
         val sendResult = engine.send(
             data = wireBytes,
-            language = com.example.itantra.codec.Language.fromCode(packet.language),
+            language = Language.fromBcp47(packet.language),
             isEmergency = packet.priority == "CRITICAL",
             priority = if (packet.priority == "CRITICAL") 1 else 2
         )
