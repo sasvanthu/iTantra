@@ -175,7 +175,7 @@ class BleLinkCodecTest {
 
         assertArrayEquals(frame, received.toByteArray())
         assertEquals(3, complete!!.epoch)
-        assertArrayEquals(payload, complete!!.bytes)
+        assertArrayEquals(payload, complete.bytes)
     }
 
     @Test

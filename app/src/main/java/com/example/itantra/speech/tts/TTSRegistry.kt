@@ -128,6 +128,17 @@ object TTSRegistry {
         if (preferOpenSource) EmbeddedOpenSourceTTS(fallbackEngine = AndroidTTSEngine())
         else AndroidTTSEngine()
 
+    fun createFallbackDspEngine(): FallbackDspTts = FallbackDspTts()
+
+    fun createIntelligibleOfflineEngine(
+        lifecycleManager: com.example.itantra.data.ModelLifecycleManager? = null,
+        manifest: com.example.itantra.data.ModelManifest? = null
+    ): SherpaOnnxTtsEngine = SherpaOnnxTtsEngine(
+        modelLifecycleManager = lifecycleManager,
+        modelManifest = manifest,
+        fallbackEngine = FallbackDspTts()
+    )
+
     private fun EngineKind.isOpenSource(): Boolean =
         this == EngineKind.OPEN_SOURCE_ESPEAK ||
             this == EngineKind.OPEN_SOURCE_PIPER ||

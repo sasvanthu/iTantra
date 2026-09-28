@@ -76,9 +76,14 @@ data class SetuPacket(
     fun toJson(): String = jsonFormat.encodeToString(this)
 
     /**
-     * Serializes this packet to UTF-8 wire bytes.
+     * Serializes this packet to compact Z-BWE binary wire format.
      */
-    fun toWireBytes(): ByteArray = toJson().toByteArray(StandardCharsets.UTF_8)
+    fun encodeBinary(): ByteArray = SetuPacketBinaryCodec.encode(this)
+
+    /**
+     * Serializes this packet to wire bytes using the preferred Z-BWE binary representation.
+     */
+    fun toWireBytes(): ByteArray = encodeBinary()
 
     companion object {
         private val jsonFormat = Json {
@@ -91,7 +96,24 @@ data class SetuPacket(
             return jsonFormat.decodeFromString<SetuPacket>(json)
         }
 
+        /**
+         * Deserializes a [SetuPacket] from compact Z-BWE binary wire format.
+         */
+        fun decodeBinary(bytes: ByteArray): SetuPacket? = SetuPacketBinaryCodec.decode(bytes)
+
+        /**
+         * Deserializes a [SetuPacket] from either Z-BWE binary format (preferred) or legacy JSON format (fallback).
+         */
         fun fromWireBytes(bytes: ByteArray): SetuPacket? {
+            if (bytes.size >= 4 &&
+                bytes[0] == SetuPacketBinaryCodec.MAGIC[0] &&
+                bytes[1] == SetuPacketBinaryCodec.MAGIC[1] &&
+                bytes[2] == SetuPacketBinaryCodec.MAGIC[2] &&
+                bytes[3] == SetuPacketBinaryCodec.MAGIC[3]
+            ) {
+                val binary = decodeBinary(bytes)
+                if (binary != null) return binary
+            }
             return try {
                 val json = String(bytes, StandardCharsets.UTF_8)
                 fromJson(json)

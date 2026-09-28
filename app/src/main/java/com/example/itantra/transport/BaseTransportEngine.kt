@@ -446,8 +446,15 @@ abstract class BaseTransportEngine(
         if (final.failed) {
             delay(ackTimeoutMs)
             if (tracker.allReliableAcked()) {
-                final = final.copy(failed = false, detail = "delivered (final ACK landed)")
+                final = final.copy(
+                    failed = false,
+                    detail = "delivered (final ACK landed)",
+                    retransmissions = tracker.retransmissions
+                )
             }
+        }
+        if (tracker.retransmissions > final.retransmissions) {
+            final = final.copy(retransmissions = tracker.retransmissions)
         }
         activeSends.remove(messageId)
 

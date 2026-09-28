@@ -27,7 +27,7 @@ import kotlin.math.sin
  *    Guarantees 100% offline, zero-dependency, open-source audio output on ANY Android or AOSP target.
  * 3. [fallbackEngine]: Optional development fallback (e.g., [AndroidTTSEngine]) when explicitly desired.
  */
-class EmbeddedOpenSourceTTS(
+open class EmbeddedOpenSourceTTS(
     private val fallbackEngine: TTSEngine? = null
 ) : TTSEngine {
 
@@ -206,7 +206,11 @@ class EmbeddedOpenSourceTTS(
         }
     }
 
-    private val formantSynthesizer = OpenSourceFormantSynthesizer()
+    protected val formantSynthesizer = OpenSourceFormantSynthesizer()
+
+    open fun synthesizePcm(text: String, language: Language = currentLanguage): ByteArray {
+        return formantSynthesizer.synthesizePcm(text, language)
+    }
 
     override fun initialize(context: Context, language: Language, onReady: () -> Unit) {
         currentLanguage = language
@@ -294,7 +298,7 @@ class EmbeddedOpenSourceTTS(
         }.start()
     }
 
-    private fun playPcmAudio(pcmData: ByteArray, isEmergency: Boolean) {
+    open fun playPcmAudio(pcmData: ByteArray, isEmergency: Boolean) {
         if (pcmData.isEmpty()) return
 
         val minBufferSize = try {

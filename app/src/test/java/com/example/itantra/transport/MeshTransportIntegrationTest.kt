@@ -111,6 +111,11 @@ class MeshTransportIntegrationTest {
         assertEquals(Language.ENGLISH, cReceived[0].language)
 
         // The relay node sees both hops: A's device-id and C's device-id.
+        withTimeout(5_000) {
+            while (b.session.value?.remoteDeviceId?.contains(bc.device.getDeviceId()) != true) {
+                delay(10)
+            }
+        }
         val bNeighbors = b.session.value!!.remoteDeviceId
         assertTrue(bNeighbors.contains(ab.host.getDeviceId()))
         assertTrue(bNeighbors.contains(bc.device.getDeviceId()))

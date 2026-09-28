@@ -80,9 +80,9 @@ class MeshTransportEngine(
     private val reassembler = MeshReassembler()
 
     private val meshScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private val edges = mutableListOf<TransportEngine>()
-    private val edgeJobs = HashMap<TransportEngine, kotlinx.coroutines.Job>()
-    private val edgeReady = HashMap<TransportEngine, CompletableDeferred<Unit>>()
+    private val edges = java.util.concurrent.CopyOnWriteArrayList<TransportEngine>()
+    private val edgeJobs = java.util.concurrent.ConcurrentHashMap<TransportEngine, kotlinx.coroutines.Job>()
+    private val edgeReady = java.util.concurrent.ConcurrentHashMap<TransportEngine, CompletableDeferred<Unit>>()
 
     private val _connectionStatus = MutableStateFlow(ConnectionStatus.DISCONNECTED)
     override val connectionStatus: StateFlow<ConnectionStatus> = _connectionStatus.asStateFlow()
@@ -191,6 +191,9 @@ class MeshTransportEngine(
                 }
                 launch {
                     edge.connectionStatus.collect { deriveConnectivity() }
+                }
+                launch {
+                    edge.session.collect { deriveConnectivity() }
                 }
             }
         }

@@ -38,10 +38,10 @@ class TransportEngineIntegrationTest {
         val hostSim: NetworkSimulator
     )
 
-    private fun enginePair(ackTimeout: Long = 150, maxRetries: Int = 6): SimPair {
-        val hostSim = NetworkSimulator()
+    private fun enginePair(ackTimeout: Long = 150, maxRetries: Int = 6, seed: Long? = null): SimPair {
+        val hostSim = NetworkSimulator(seed)
         val host = SimulatedTransport(hostSim, ackTimeoutMs = ackTimeout, maxRetries = maxRetries)
-        val device = SimulatedTransport(NetworkSimulator(), ackTimeoutMs = ackTimeout, maxRetries = maxRetries)
+        val device = SimulatedTransport(NetworkSimulator(seed?.let { it + 1 }), ackTimeoutMs = ackTimeout, maxRetries = maxRetries)
         host.bindPeer(device)
         return SimPair(host, device, hostSim)
     }
