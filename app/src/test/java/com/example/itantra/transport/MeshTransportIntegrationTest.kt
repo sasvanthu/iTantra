@@ -34,10 +34,14 @@ class MeshTransportIntegrationTest {
         val hostSim: NetworkSimulator
     )
 
-    private fun enginePair(ackTimeout: Long = 150, maxRetries: Int = 6): SimPair {
-        val hostSim = NetworkSimulator()
+    private fun enginePair(ackTimeout: Long = 150, maxRetries: Int = 6, seed: Long? = null): SimPair {
+        val hostSim = NetworkSimulator(seed)
         val host = SimulatedTransport(hostSim, ackTimeoutMs = ackTimeout, maxRetries = maxRetries)
-        val device = SimulatedTransport(NetworkSimulator(), ackTimeoutMs = ackTimeout, maxRetries = maxRetries)
+        val device = SimulatedTransport(
+            NetworkSimulator(seed?.let { it + 1 }),
+            ackTimeoutMs = ackTimeout,
+            maxRetries = maxRetries
+        )
         host.bindPeer(device)
         return SimPair(host, device, hostSim)
     }
@@ -173,10 +177,10 @@ class MeshTransportIntegrationTest {
 
     @Test
     fun `hop edge loss is healed by the link reliability and mesh still delivers`() = runBlocking {
-        val up = enginePair(ackTimeout = 150, maxRetries = 12); up.up()
-        // SIMULATION on the hop, after handshake. 50% loss over ~30 frames makes
-        // the draw effectively deterministic (P(no drop) ~= 1e-9), so the
-        // healing assertions never depend on luck.
+        // Seeded simulator (seed = 7L) makes the 50% loss draw deterministic,
+        // so the healing assertions never depend on the random draw.
+        val up = enginePair(ackTimeout = 150, maxRetries = 12, seed = 7L); up.up()
+        // SIMULATION on the hop, after handshake.
         up.hostSim.config.lossRate = 0.5f
 
         val sender = MeshTransportEngine()

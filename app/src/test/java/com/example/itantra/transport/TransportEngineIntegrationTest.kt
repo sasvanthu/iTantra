@@ -182,7 +182,10 @@ class TransportEngineIntegrationTest {
 
     @Test
     fun `packet loss is recovered by retransmission and message still delivers`() = runBlocking {
-        val pair = enginePair(ackTimeout = 60, maxRetries = 12)
+        // Seeded simulator: the loss draw is deterministic (PROTOTYPE_STATUS §4),
+        // so this test is stable under full-suite load instead of depending on
+        // the random draw happening to drop at least one frame.
+        val pair = enginePair(ackTimeout = 60, maxRetries = 12, seed = 1L)
         pair.up()
         pair.hostSim.config.lossRate = 0.35f // SIMULATION
 

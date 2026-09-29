@@ -18,7 +18,11 @@
 | **Wire Bytes (Long Msg: 138B text)** | Network | **MEASURED** | `186 B` packetized wire (en) | `< 250 bytes` | 31.2% below UTF-8 |
 | **Indic Text Compression (Brahmic vs UTF-8)** | Network | **MEASURED** | `58.8% - 70.5% reduction` (hi/ta) | `> 50%` | Pure bitwise/offset packing across all 9 Indic scripts |
 | **Wire Serialization Overhead (binary vs JSON)** | Network | **MEASURED** | `111 B` (binary) vs `432 B` (JSON) | `< 120 bytes` | Fixed 48B header + raw 12B nonce + raw 16B tag + UTF8 IDs |
-| **Unit Test Suite** | Reliability | **MEASURED** | `366 passed, 0 failed, 1 skipped` | 100% pass | 46 tests added since Phase 7 baseline (321): Phases 8-13 + benchmark/baseline suites |
+| **Unit Test Suite** | Reliability | **MEASURED** | `367 passed, 0 failed, 1 skipped` | 100% pass | 84 tests added across all phases (baseline was 283): 100% green |
+| **SUTRA Semantic Frame (Emergency intent+slots)** | Network | **MEASURED** | `9 bytes` (wire size) | `8–14 bytes` | 57.1% reduction vs 21B UTF-8 for "HELP TRAPPED 5 PEOPLE" + instant semantic machine-readability |
+| **SUTRA Minimal Frame (Domain+Intent+Flags)** | Network | **MEASURED** | `6 bytes` | `< 10 bytes` | Zero-slot minimal emergency frame |
+| **Progressive Layer Preemption** | Latency/QoS | **MEASURED** | `Priority 3 (P0)` | Priority Preemption | Layer 0 SUTRA frames jump queue ahead of Layer 1/2 in `PriorityFrameQueue` |
+| **Persistent DTN Queue Survival** | Reliability/Storage | **MEASURED** | `100% recovered on reboot` | Survival | Atomic disk synchronization (`dtn_*.bin`); TTL expiration and priority eviction enforced |
 | **Codec Encode Latency (Short/Med/Long)** | Latency | **MEASURED** | `0.115 / 0.431 / 0.399 ms` | `< 1.0 ms` | Deterministic token matching |
 | **Codec Decode Latency (Short/Med/Long)** | Latency | **MEASURED** | `0.148 / 0.077 / 0.144 ms` | `< 1.0 ms` | Re-expansion and case restore |
 | **Java Heap (Idle)** | Memory | **ESTIMATE** | `~45 MB` | `< 35 MB` | ART runtime base with Jetpack Compose |
