@@ -8,7 +8,7 @@ Legend: ✅ implemented + tested · ⛔ not startable on this prototype · ⚠ p
 
 | # | Requirement | Implementation | Verified by |
 |---|---|---|---|
-| R1 | End-to-end offline voice relay (speak → wire → hear) | `SpeechPipeline`, `SimulatedTransport` self-loop, `VoskSTTEngine`, `AndroidTTSEngine` receive speak | `PipelineSimulationTest` (pipeline round-trip), 219 JVM suite |
+| R1 | End-to-end offline voice relay (speak → wire → hear) | `SpeechPipeline`, `SimulatedTransport` self-loop, `VoskSTTEngine`, `AndroidTTSEngine` receive speak | `PipelineSimulationTest` (pipeline round-trip), 367 JVM suite |
 | R2 | Operate with no internet / no cloud speech | engines purely local; no network calls; `assets/models` empty by design | code scan + `TTS_AUDIT.md` verdict |
 | R3 | 10 Indian languages supported | `Language` enum: en hi ta bn te mr gu kn ml or; codec lossless for all 10 | Codec round-trip tests (dict + ESCAPE) |
 | R4 | Offline STT (priority en/hi/ta) | Vosk wired for en/hi/ta; MODEL CENTER filesDir load (`models/<code>/`, `stt-<LANG>.zip`) | `ModelManagerTest`, Vosk resolve path |

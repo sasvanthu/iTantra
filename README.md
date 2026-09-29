@@ -32,8 +32,8 @@ internet, cloud API or external server**.
     SPEAKER ◄── TTS (formant synth placeholder) ◄── DECRYPT ◄── TRANSPORT (Wi-Fi / BLE)
 ```
 
-This is a **working prototype of the core pipeline**, validated by **283 JVM unit
-tests (0 failures, 1 skipped)**. Physical transport validation is outstanding.
+This is a **working prototype of the core pipeline**, validated by **366 passing
+JVM unit tests (0 failures, 1 skipped)**. Physical transport validation is outstanding.
 
 ---
 
@@ -193,7 +193,7 @@ two devices must be paired before they can talk.
 ```bash
 ./gradlew.bat testDebugUnitTest
 ```
-*Current test suite: 283 tests, 0 failures, 1 ignored.*
+*Current test suite: 366 passed, 0 failures, 1 skipped (367 total).*
 
 ### Build Release APK
 ```bash
@@ -244,7 +244,26 @@ adb shell am start -n com.example.itantra/.MainActivity
 
 ---
 
-## 10. Physical Testing Limitations & Disclosure
+## 10. Documentation Index
+
+| Document | What it covers |
+| :--- | :--- |
+| [`PROTOTYPE_STATUS.md`](PROTOTYPE_STATUS.md) | Honest PASS / UNIT / CODE / BLOCKED ledger |
+| [`ResourceBudget.md`](ResourceBudget.md) | Measured vs TARGET metric ledger |
+| [`docs/WIRE_PROTOCOL.md`](docs/WIRE_PROTOCOL.md) | Envelope, framing, packetization, mesh, adaptation |
+| [`docs/CODEC_SPEC.md`](docs/CODEC_SPEC.md) | Brahmic packing + phoneme fallback, lossless ranges |
+| [`docs/MODEL_MANAGEMENT.md`](docs/MODEL_MANAGEMENT.md) | Catalog, probe, validation-on-acquire, residency |
+| [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) | Measured latency/size/cold-start/heap numbers |
+| [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md) | What was tried, what broke, what was learned |
+| [`docs/KNOWN_LIMITATIONS.md`](docs/KNOWN_LIMITATIONS.md) | Honest constraints and non-claims |
+| [`docs/OPERATIONS.md`](docs/OPERATIONS.md) | Build, test, benchmark, pair, acceptance |
+| [`docs/requirement-matrix.md`](docs/requirement-matrix.md) | SIH requirement → implementation → test trace |
+| [`docs/benchmark-test-matrix.md`](docs/benchmark-test-matrix.md) | Test matrix by subsystem |
+| [`TTS_AUDIT.md`](TTS_AUDIT.md) | TTS engine honesty audit |
+
+---
+
+## 11. Physical Testing Limitations & Disclosure
 
 * **Single-Device Validated**: All tests involving microphone capture, STT recognition, RetroSpeechCodec compression/decompression, Embedded formant TTS audio synthesis, AudioTrack output, battery governor, and UI responsiveness have been executed and verified on a physical phone (Vivo V2334, Android 16).
-* **Multi-Device Physical Status (Pending)**: Physical Wi-Fi Direct socket connectivity, BLE 2M-PHY peripheral/central GATT exchanges, and 3-phone physical multi-hop RF mesh forwarding require additional dedicated physical devices. In the current prototype, their wire serialization, packet framing, CRC-32 validation, and routing state machines are fully simulated and validated by 283 automated tests.
+* **Multi-Device Physical Status (Pending)**: Physical Wi-Fi Direct socket connectivity, BLE 2M-PHY peripheral/central GATT exchanges, and 3-phone physical multi-hop RF mesh forwarding require additional dedicated physical devices. In the current prototype, their wire serialization, packet framing, CRC-32 validation, and routing state machines are fully simulated and validated by 366 automated unit tests (1 skipped).

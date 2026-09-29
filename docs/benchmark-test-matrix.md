@@ -110,6 +110,7 @@ Ctrl-f each keyword in the JVM suite to reproduce the exact test.
 |---|---|
 | `gradlew.bat testDebugUnitTest` | 367 tests · 0 failures · 1 skipped (must never regress below) |
 | `gradlew.bat assembleDebug` | green APK build |
+| `gradlew.bat testDebugUnitTest --offline --tests "com.example.itantra.transport.TransportEngineIntegrationTest" --tests "com.example.itantra.transport.MeshTransportIntegrationTest"` | deterministic (seed-pinned simulators) — repeatable under load |
 
 ## On-device hardware checklist (HW TEST tab, not replaceable by JVM)
 
