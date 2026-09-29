@@ -2,6 +2,9 @@ package com.example.itantra.transport
 
 import com.example.itantra.codec.BinaryCodec
 import com.example.itantra.codec.Language
+import com.example.itantra.mesh.MeshBeacon
+import com.example.itantra.mesh.MeshNeighborSnapshot
+import com.example.itantra.mesh.MeshNeighborTable
 import com.example.itantra.protocol.FrameReader
 import com.example.itantra.protocol.FrameReadResult
 import com.example.itantra.protocol.FrameWriter
@@ -71,7 +74,9 @@ import java.util.concurrent.atomic.AtomicLong
  */
 class MeshTransportEngine(
     private val maxTtl: Int = MeshRouter.DEFAULT_MAX_TTL,
-    private val storeAndForwardQueue: StoreAndForwardQueue = StoreAndForwardQueue()
+    private val storeAndForwardQueue: StoreAndForwardQueue = StoreAndForwardQueue(),
+    private val neighborDiscoveryEnabled: Boolean = true,
+    beaconIntervalMs: Long = MeshNeighborTable.DEFAULT_BEACON_INTERVAL_MS
 ) : TransportEngine {
 
     override val transportType: TransportType = TransportType.MESH
@@ -114,6 +119,23 @@ class MeshTransportEngine(
     /** QUEUED / FORWARDED / EXPIRED / DROPPED counters for the relay panel. */
     val storeForwardStats: StateFlow<StoreForwardStats> = _storeForwardStats.asStateFlow()
 
+    /** Periodic presence beacon: how this node finds its neighbors. */
+    private val bootId = MeshBeacon.newBootId()
+    private val neighborTable = MeshNeighborTable(localDeviceId)
+    private val _neighbors = MutableStateFlow(MeshNeighborSnapshot(localDeviceId))
+    /**
+     * Observed topology: who is one hop away, and who a direct neighbor claims
+     * to be able to hear. Nothing here is inferred from config — every entry
+     * comes from a beacon that was actually received.
+     */
+    val neighbors: StateFlow<MeshNeighborSnapshot> = _neighbors.asStateFlow()
+
+    private fun refreshNeighborSnapshot() {
+        val now = System.currentTimeMillis()
+        neighborTable.expire(now)
+        _neighbors.value = neighborTable.snapshot(now)
+    }
+
     fun clearRelayStats() {
         _relayStats.value = MeshRelayStats()
     }
@@ -146,6 +168,41 @@ class MeshTransportEngine(
                 governor.observe(_linkMetrics.value)
             }
         }
+        if (neighborDiscoveryEnabled) {
+            // Beacons only go out while a link exists: a beacon with nowhere to
+            // land burns battery and teaches nobody anything.
+            meshScope.launch {
+                while (true) {
+                    kotlinx.coroutines.delay(beaconIntervalMs.coerceAtLeast(1_000L))
+                    if (isConnectedCount() > 0) sendBeacon()
+                    refreshNeighborSnapshot()
+                }
+            }
+        }
+    }
+
+    /**
+     * Flood one presence beacon advertising this node and the direct peers it
+     * can currently hear. Routed through the same hop envelope as a message, so
+     * a beacon relays onward and a node two hops away still learns the topology.
+     */
+    private suspend fun sendBeacon() {
+        // Advertise only neighbours this node has actually observed, never the
+        // link session's remote id: those are different namespaces (a MAC or
+        // BLE address vs this node's mesh id), so a receiver could never match
+        // them. What we know as a neighbour is exactly what we can advertise.
+        val peerIds = neighborTable.snapshot(System.currentTimeMillis()).direct.map { it.deviceId }
+        val beacon = MeshBeacon(
+            origin = localDeviceId,
+            bootId = bootId,
+            peers = peerIds,
+            languageMask = MeshBeacon.languageMaskOf(
+                Language.values().filterNot { it == Language.UNKNOWN }
+            )
+        )
+        val frame = FrameWriter.write(FRAME_EPOCH, beacon.serialize())
+        val stats = flood(router.craft(frame).serialize())
+        if (stats.okCount > 0) neighborTable.noteSent(System.currentTimeMillis())
     }
 
     companion object {
@@ -478,6 +535,22 @@ class MeshTransportEngine(
             link { corruptedFrames++ }
             return
         }
+
+        // A presence beacon rides the same envelope as a message, so unwrap the
+        // frame first and look at the bytes inside it.
+        val frame = unwrapSingleFrame(hop.payload) ?: run {
+            link { corruptedFrames++; packetLoss++ }
+            return
+        }
+
+        // Presence data, not application traffic: it feeds the topology table
+        // and is relayed onward, and is deliberately never counted as a
+        // message, a gap or a loss.
+        if (MeshBeacon.hasMagic(frame)) {
+            handleBeaconHop(hop, frame, fromEdge)
+            return
+        }
+
         val routing = router.receive(hop)
         if (routing is MeshRouting.Drop) {
             link { duplicatePackets++ }
@@ -485,7 +558,7 @@ class MeshTransportEngine(
             return
         }
 
-        val packet = parseSingleFrame(hop.payload) ?: run {
+        val packet = Packet.deserialize(frame) ?: run {
             link { corruptedFrames++; packetLoss++ }
             return
         }
@@ -540,11 +613,32 @@ class MeshTransportEngine(
             _relayStats.update { it.copy(ttlExpired = it.ttlExpired + 1) }
         }
     }
+    /**
+     * Fold a received beacon into the topology table and keep propagating it
+     * while the TTL budget allows. A corrupt beacon is dropped silently: it is
+     * presence data, not a message, so it must not pollute loss counters.
+     */
+    private suspend fun handleBeaconHop(hop: HopPacket, beaconBytes: ByteArray, fromEdge: TransportEngine) {
+        val beacon = MeshBeacon.deserialize(beaconBytes) ?: return
+        val routing = router.receive(hop)
+        if (routing is MeshRouting.Drop) return
 
-    private fun parseSingleFrame(hopPayload: ByteArray): Packet? {
+        neighborTable.observe(beacon, relayHops = hop.hops, nowMs = System.currentTimeMillis())
+        refreshNeighborSnapshot()
+
+        if (routing is MeshRouting.Accept && routing.forwardTtl > 0) {
+            flood(
+                hop.copy(ttl = routing.forwardTtl, hops = hop.hops + 1).serialize(),
+                except = fromEdge
+            )
+        }
+    }
+
+    /** Unwrap one RETRO frame from a hop payload, or null if it is not a frame. */
+    private fun unwrapSingleFrame(hopPayload: ByteArray): ByteArray? {
         val results = FrameReader().feed(hopPayload, maxFrames = 1)
         val frame = (results.singleOrNull() as? FrameReadResult.Complete)?.frame ?: return null
-        return Packet.deserialize(frame.bytes)
+        return frame.bytes
     }
 
     private fun syncReassemblerMetrics() {
@@ -630,6 +724,9 @@ class MeshTransportEngine(
         lastDupSeen = 0
         lastGapsSeen = 0
         lastDroppedSeen = 0
+        // Discovered peers live until their beacon TTL runs out, not until the
+        // link drops: a node one hop away is still there when an edge flaps.
+        refreshNeighborSnapshot()
     }
 
     private fun emitEvent(event: LinkMessageEvent) {

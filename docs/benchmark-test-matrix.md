@@ -1,6 +1,6 @@
 # Benchmark / Test Matrix
 
-Baseline run: `gradlew.bat testDebugUnitTest` → **367 tests · 29 suites ·
+Baseline run: `gradlew.bat testDebugUnitTest` → **398 tests · 29 suites ·
 0 failures, 1 skipped** (baseline 321 → current; latest measured full run).
 
 Ctrl-f each keyword in the JVM suite to reproduce the exact test.
@@ -108,7 +108,7 @@ Ctrl-f each keyword in the JVM suite to reproduce the exact test.
 
 | Command | Contract |
 |---|---|
-| `gradlew.bat testDebugUnitTest` | 367 tests · 0 failures · 1 skipped (must never regress below) |
+| `gradlew.bat testDebugUnitTest` | 398 tests · 0 failures · 1 skipped (must never regress below) |
 | `gradlew.bat assembleDebug` | green APK build |
 | `gradlew.bat testDebugUnitTest --offline --tests "com.example.itantra.transport.TransportEngineIntegrationTest" --tests "com.example.itantra.transport.MeshTransportIntegrationTest"` | deterministic (seed-pinned simulators) — repeatable under load |
 

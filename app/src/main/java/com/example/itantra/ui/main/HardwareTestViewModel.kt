@@ -16,6 +16,7 @@ import com.example.itantra.lab.*
 import com.example.itantra.speech.stt.HybridSTTEngine
 import com.example.itantra.speech.stt.VoskSTTEngine
 import com.example.itantra.speech.tts.TTSEngine
+import com.example.itantra.mesh.MeshNeighborSnapshot
 import com.example.itantra.transport.*
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -93,6 +94,7 @@ class HardwareTestViewModel(application: Application) : AndroidViewModel(applica
         val edge2: EdgeSpec = EdgeSpec(radio = LabRadio.WIFI, role = LabRole.DEVICE),
         val meshNode: StartedMeshNode? = null,
         val meshRelay: MeshRelayStats = MeshRelayStats(),
+        val meshNeighbors: MeshNeighborSnapshot = MeshNeighborSnapshot(""),
 
         val speechLanguage: Language = Language.ENGLISH,
         val speechLastReport: SpeechPipeline.SpeechSendReport? = null,
@@ -150,6 +152,13 @@ class HardwareTestViewModel(application: Application) : AndroidViewModel(applica
             labMesh.connectionStatus.collect { s ->
                 if (_state.value.meshNode != null) {
                     _state.update { it.copy(connectionStatus = s) }
+                }
+            }
+        }
+        viewModelScope.launch {
+            labMesh.neighbors.collect { snapshot ->
+                if (_state.value.meshNode != null) {
+                    _state.update { it.copy(meshNeighbors = snapshot) }
                 }
             }
         }

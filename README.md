@@ -32,7 +32,7 @@ internet, cloud API or external server**.
     SPEAKER ◄── TTS (formant synth placeholder) ◄── DECRYPT ◄── TRANSPORT (Wi-Fi / BLE)
 ```
 
-This is a **working prototype of the core pipeline**, validated by **366 passing
+This is a **working prototype of the core pipeline**, validated by **397 passing
 JVM unit tests (0 failures, 1 skipped)**. Physical transport validation is outstanding.
 
 ---
@@ -52,6 +52,7 @@ JVM unit tests (0 failures, 1 skipped)**. Physical transport validation is outst
 | **Replay / Duplicate Defence** | ✅ **VERIFIED BY UNIT TEST** | `ReplayDetector` keyed on messageId + packetId + sequenceNumber |
 | **Packet Protocol (9 Types, CRC, Frag)** | ✅ **VERIFIED BY UNIT TEST** | All 9 control/data frames, CRC-32, bit-corruption rejection, out-of-order reassembly |
 | **Mesh Store-and-Forward Logic** | ✅ **VERIFIED BY SIMULATION** | 3-node multi-hop line (A $\to$ B $\to$ C), deduplication, loop prevention, TTL expiration. **In-process, not 3 phones.** |
+| **Mesh Neighbor Discovery** | ✅ **VERIFIED BY UNIT TEST** | `MeshBeacon` presence beacons (10s cadence, 45s expiry) carried on the real hop envelope. Direct (1 hop) vs two hop classified from the hop envelope, never invented. **In-process, not 3 phones.** |
 | **PTT / Walkie-Talkie Mode** | ✅ **VERIFIED ON DEVICE** | Press-and-hold interaction and single-device local loopback validation |
 | **Emergency Priority & Presence Bypass** | ✅ **VERIFIED BY UNIT TEST** | `CRITICAL` priority queueing, `USAGE_ALARM` audio routing, presence bypass |
 | **Low-Power Governor** | ✅ **VERIFIED BY UNIT TEST** | OS battery-driven gating (`HEALTHY`, `LOW`, `CRITICAL` power profiles) |
@@ -266,4 +267,4 @@ adb shell am start -n com.example.itantra/.MainActivity
 ## 11. Physical Testing Limitations & Disclosure
 
 * **Single-Device Validated**: All tests involving microphone capture, STT recognition, RetroSpeechCodec compression/decompression, Embedded formant TTS audio synthesis, AudioTrack output, battery governor, and UI responsiveness have been executed and verified on a physical phone (Vivo V2334, Android 16).
-* **Multi-Device Physical Status (Pending)**: Physical Wi-Fi Direct socket connectivity, BLE 2M-PHY peripheral/central GATT exchanges, and 3-phone physical multi-hop RF mesh forwarding require additional dedicated physical devices. In the current prototype, their wire serialization, packet framing, CRC-32 validation, and routing state machines are fully simulated and validated by 366 automated unit tests (1 skipped).
+* **Multi-Device Physical Status (Pending)**: Physical Wi-Fi Direct socket connectivity, BLE 2M-PHY peripheral/central GATT exchanges, and 3-phone physical multi-hop RF mesh forwarding require additional dedicated physical devices. In the current prototype, their wire serialization, packet framing, CRC-32 validation, and routing state machines are fully simulated and validated by 397 automated unit tests (1 skipped).

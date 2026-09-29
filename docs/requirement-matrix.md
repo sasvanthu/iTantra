@@ -35,5 +35,10 @@ Legend: ✅ implemented + tested · ⛔ not startable on this prototype · ⚠ p
 
 - No offline model bytes are shipped in this repo (recognizer/voice count 0 unless operator installs).
 - Compression % for the 7 escaped languages is ~0 % by design and shown as `OVERHEAD`/`0.0%`, never padded.
-- Mesh hop count / neighbors are not reported because the build does not implement neighbor
-  discovery — the UI says so rather than inventing a topology.
+- Mesh neighbor topology IS reported, and only from beacons actually heard
+  (`MeshBeacon` / `MeshNeighborTable`, 10 s cadence, 45 s expiry). Direct (1 hop)
+  vs two hop is classified from the hop envelope, so a relayed node is never
+  presented as a link we hold, and direct evidence outranks hearsay. Nothing is
+  inferred beyond two hops, and a departed node expires rather than lingering.
+  The count is per-node and observed — there is still no global registry, and
+  three-plus-hop reachability is deliberately not reported.

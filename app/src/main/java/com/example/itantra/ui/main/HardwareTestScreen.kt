@@ -24,6 +24,7 @@ import com.example.itantra.codec.Language
 import com.example.itantra.lab.*
 import com.example.itantra.transport.BleLinkCheck
 import com.example.itantra.transport.ConnectionStatus
+import com.example.itantra.mesh.MeshNeighborSnapshot
 import com.example.itantra.transport.MeshRelayStats
 import com.example.itantra.ui.theme.*
 
@@ -310,6 +311,50 @@ fun HardwareTestScreen(viewModel: HardwareTestViewModel = viewModel()) {
 // ------------------------------------------------------------------
 
 @Composable
+fun MeshNeighborSection(
+    node: StartedMeshNode?,
+    neighbors: MeshNeighborSnapshot
+) {
+    if (node == null) return
+    val now = System.currentTimeMillis()
+    Spacer(modifier = Modifier.height(6.dp))
+    Text(
+        text = "NEIGHBORS (BEACON DISCOVERY)",
+        fontFamily = FontFamily.Monospace,
+        fontSize = 10.sp,
+        color = RetroCyan
+    )
+    if (neighbors.isAlone) {
+        Text(
+            text = "NO NEIGHBORS HEARD YET — waiting for a beacon (10s interval, 45s expiry).",
+            fontFamily = FontFamily.Monospace,
+            fontSize = 10.sp,
+            color = RetroGray
+        )
+        return
+    }
+    MetricRow("DIRECT (1 HOP):", "${neighbors.direct.size}", RetroGreen)
+    MetricRow("TWO HOP (RELAYED):", "${neighbors.twoHop.size}", RetroAmber)
+    neighbors.direct.forEach { peer ->
+        HwStatusRow(
+            "  1H ${peer.deviceId}:",
+            "${peer.ageSeconds(now)}s${if (peer.languages.isEmpty()) "" else " | " + peer.languages.joinToString(",") { it.name.lowercase() }}",
+            RetroGreen
+        )
+    }
+    neighbors.twoHop.forEach { peer ->
+        HwStatusRow("  2H ${peer.deviceId}:", "${peer.ageSeconds(now)}s", RetroAmber)
+    }
+    MetricRow("BEACONS SENT/HEARD:", "${neighbors.beaconsSent}/${neighbors.beaconsHeard}", RetroCyan)
+    Text(
+        text = "TWO HOP = LEARNED FROM A DIRECT NEIGHBOR'S BEACON, NOT A LINK YOU HOLD.",
+        fontFamily = FontFamily.Monospace,
+        fontSize = 9.sp,
+        color = RetroGray
+    )
+}
+
+@Composable
 fun MeshNodeSection(
     viewModel: HardwareTestViewModel,
     role: MeshNodeRole,
@@ -374,6 +419,7 @@ fun MeshNodeSection(
             val meshState = viewModel.state.value
             HwStatusRow("STATUS:", hwStatusLabel(meshState.connectionStatus), hwStatusColor(meshState.connectionStatus))
         }
+        MeshNeighborSection(node = node, neighbors = viewModel.state.value.meshNeighbors)
         Text(
             text = "MESH IS BROADCAST + PER-HOP RELIABLE. NO END-TO-END ACK — REPORT HOP DELIVERY SEPARATELY FROM END-TO-END.",
             fontFamily = FontFamily.Monospace,

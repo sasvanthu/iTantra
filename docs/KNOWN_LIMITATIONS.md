@@ -64,3 +64,9 @@
 - No ProGuard/size trimming in the release block (APKs larger than target).
 - No REST endpoints, no cloud SDK — fully offline by construction, which also
   means no remote model provisioning without human file transfer.
+- Neighbor discovery is two hops deep, per node, and observation-only: there is
+  no registry, no global view, and no three-plus-hop reachability claim. A node
+  that hears nothing for 45 s is reported as gone rather than remembered.
+- Beacons are not location, identity or trust: an id is whatever the origin
+  field claims, with no key exchange behind it (see ECDH above), and beacon
+  language bits are a declared capability, not a proof of fluency.
