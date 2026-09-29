@@ -144,17 +144,15 @@ tests including a regression guard.
 
 ---
 
-## 4. Known flaky test (pre-existing, not introduced here)
+## 4. Deterministic reliability tests (previously flaky, now fixed)
 
 `TransportEngineIntegrationTest.packet loss is recovered by retransmission and
-message still delivers` asserts `result.retransmissions > 0` while relying on a
-**random** 35% loss rate over a 30 KB message. Whether any packet is actually
-dropped depends on the random draw, so the test is stochastic: it passed 6/6 in
-isolation and failed once under full-suite load during this session. It exercises
-only `BaseTransportEngine` / `NetworkSimulator`, neither of which was modified.
-Left unfixed as out of scope — but it should be made deterministic (seeded RNG,
-or a loss pattern that guarantees a drop) before anyone treats a green suite as
-reliable.
+message still delivers` and `MeshTransportIntegrationTest.hop edge loss ...`
+previously relied on **random** loss rates; under full-suite load, whether any
+packet was dropped and whether `retransmissions > 0` held depended on the random
+draw. **Fixed this session:** both now seed their `NetworkSimulator`
+(`seed = 1L` / `seed = 7L`), making the draw deterministic — verified 5/5
+consecutive runs. A green suite is now reproducible on demand.
 
 ---
 

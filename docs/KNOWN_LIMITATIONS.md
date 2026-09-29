@@ -51,12 +51,12 @@
 - Store-and-forward is bounded at 4 MiB / 256 KiB per message; oversize arrivals
   are displaced or dropped (and counted).
 
-## 7. Stochastic test
+## 7. Determinism (fixed)
 
-- `TransportEngineIntegrationTest.packet loss is recovered by retransmission...`
-  relies on random 35% loss and can fail when the draw produces no drop. See
-  `PROTOTYPE_STATUS.md §4`; it should be made deterministic before someone
-  treats a green suite as fully reliable.
+- `TransportEngineIntegrationTest.packet loss...` and `MeshTransportIntegrationTest.hop edge
+  loss...` previously relied on unseeded random loss. **Fixed:** both now use seed-pinned
+  simulators (`seed = 1L` / `7L`), so the loss draw is deterministic and a green suite is
+  trustworthy (verified 5/5 consecutive runs). Historical note kept in `PROTOTYPE_STATUS.md §4`.
 
 ## 8. Deliberately absent
 
