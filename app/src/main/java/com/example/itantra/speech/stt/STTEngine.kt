@@ -75,8 +75,13 @@ class VoskSTTEngine : STTEngine {
      * the language as not-yet-usable instead of inventing a model.
      */
     private fun resolveModel(context: Context, language: Language): String? {
-        val unpackDir = File(context.filesDir, "models/${modelCode(language)}")
-        if (looksLikeVoskModel(unpackDir)) return unpackDir.absolutePath
+        val unpackDir = LanguagePackManager.getModelDirectory(context, language)
+        if (unpackDir.isDirectory) {
+            val root = LanguagePackManager.resolveVoskRoot(unpackDir)
+            if (LanguagePackManager.isValidVoskModelDir(root)) {
+                return root.absolutePath
+            }
+        }
 
         val operatorZip = File(context.filesDir, "stt-${language.name}.zip")
         if (operatorZip.isFile) {
@@ -85,7 +90,10 @@ class VoskSTTEngine : STTEngine {
             } catch (e: IOException) {
                 Log.e(TAG, "Error unpacking installed model zip", e)
             }
-            if (looksLikeVoskModel(unpackDir)) return unpackDir.absolutePath
+            val root = LanguagePackManager.resolveVoskRoot(unpackDir)
+            if (LanguagePackManager.isValidVoskModelDir(root)) {
+                return root.absolutePath
+            }
         }
 
         val bundledBase = bundledAssetBase(language) ?: return null
@@ -103,6 +111,8 @@ class VoskSTTEngine : STTEngine {
         when (language) {
             Language.ENGLISH -> "model-en"
             Language.HINDI -> "model-hi"
+            Language.TELUGU -> "model-te"
+            Language.GUJARATI -> "model-gu"
             Language.TAMIL -> "model-ta"
             else -> null
         }
@@ -111,11 +121,11 @@ class VoskSTTEngine : STTEngine {
         when (language) {
             Language.ENGLISH -> "en"
             Language.HINDI -> "hi"
+            Language.TELUGU -> "te"
+            Language.GUJARATI -> "gu"
             Language.TAMIL -> "ta"
             Language.BENGALI -> "bn"
-            Language.TELUGU -> "te"
             Language.MARATHI -> "mr"
-            Language.GUJARATI -> "gu"
             Language.KANNADA -> "kn"
             Language.MALAYALAM -> "ml"
             Language.ODIA -> "or"
@@ -124,10 +134,7 @@ class VoskSTTEngine : STTEngine {
 
     /** A valid Vosk model directory contains graph + am + conf metadata. */
     private fun looksLikeVoskModel(dir: File): Boolean {
-        if (!dir.isDirectory) return false
-        return File(dir, "conf/mfcc.conf").isFile ||
-            File(dir, "conf").isDirectory ||
-            File(dir, "graph").isDirectory
+        return LanguagePackManager.isValidVoskModelDir(dir)
     }
 
     private fun unpackZip(zip: File, target: File) {
@@ -184,10 +191,13 @@ class VoskSTTEngine : STTEngine {
         }
     }
 
+    private var lastRecognizedText: String = ""
+
     private fun parseResult(json: String, listener: (String) -> Unit, isFinal: Boolean) {
         try {
             val text = extractTextFromJson(json)
             if (text.isNotBlank()) {
+                lastRecognizedText = text
                 if (isFinal) {
                     Log.i(TAG, "[STT] Final recognized sentence: \"$text\"")
                     listener(text)
@@ -202,12 +212,21 @@ class VoskSTTEngine : STTEngine {
 
     private fun extractTextFromJson(json: String): String {
         val textMatch = Regex("\"text\"\\s*:\\s*\"([^\"]*?)\"").find(json)
-        return textMatch?.groupValues?.get(1) ?: ""
+        if (textMatch != null && textMatch.groupValues[1].isNotBlank()) {
+            return textMatch.groupValues[1].trim()
+        }
+        val partialMatch = Regex("\"partial\"\\s*:\\s*\"([^\"]*?)\"").find(json)
+        return partialMatch?.groupValues?.get(1)?.trim() ?: ""
     }
 
     override fun stopListening() {
         Log.i(TAG, "[VOICE] Stopping microphone capture for Vosk STT")
-        speechService?.stop()
+        try {
+            speechService?.stop()
+        } catch (e: Exception) {
+            Log.w(TAG, "Error stopping SpeechService", e)
+        }
+        speechService = null
         _isListening.value = false
     }
 
@@ -401,9 +420,11 @@ class AndroidSTTEngine : STTEngine {
 }
 
 /**
- * Hybrid STT Engine that enforces pure offline Vosk recognition when a model
- * is packaged/installed on the device, and seamlessly falls back to Android's
- * native SpeechRecognizer so voice input works immediately on physical devices.
+ * Strict Offline STT Engine that enforces genuine offline Vosk recognition.
+ * To guarantee zero-cloud and offline-native operation, this engine refuses
+ * to fall back silently to Android's online SpeechRecognizer.
+ * If an offline language pack is not installed, recognition is blocked until
+ * the user installs it via the language pack setup or MODEL CENTER.
  */
 class HybridSTTEngine : STTEngine {
 
@@ -412,42 +433,79 @@ class HybridSTTEngine : STTEngine {
     }
 
     private val voskEngine = VoskSTTEngine()
-    private val androidEngine = AndroidSTTEngine()
-    private var activeEngine: STTEngine = androidEngine
+    private val sherpaEngine = SherpaOnnxSTTEngine()
+    private var activeEngine: STTEngine? = null
+
+    private fun safeLog(priority: Int, msg: String) {
+        try {
+            when (priority) {
+                Log.INFO -> Log.i(TAG, msg)
+                Log.WARN -> Log.w(TAG, msg)
+                Log.ERROR -> Log.e(TAG, msg)
+                else -> Log.d(TAG, msg)
+            }
+        } catch (_: Throwable) {}
+    }
 
     override fun initialize(context: Context, language: Language) {
-        // Try Vosk first: does a real model exist on device?
+        val modelDir = LanguagePackManager.getModelDirectory(context, language)
+        val resolved = LanguagePackManager.resolveVoskRoot(modelDir)
+        val hasOnnx = File(resolved, "model.int8.onnx").isFile || File(resolved, "model.onnx").isFile
+
+        if (hasOnnx || language == Language.TAMIL || language == Language.KANNADA) {
+            if (activeEngine !== sherpaEngine) {
+                voskEngine.shutdown()
+            }
+            sherpaEngine.initialize(context, language)
+            if (sherpaEngine.isInitialized()) {
+                activeEngine = sherpaEngine
+                safeLog(Log.INFO, "[STT] Pure offline Sherpa-ONNX model active for $language (AI4Bharat IndicConformer).")
+                return
+            }
+        }
+
+        if (activeEngine !== voskEngine) {
+            sherpaEngine.shutdown()
+        }
         voskEngine.initialize(context, language)
         if (voskEngine.isInitialized()) {
             activeEngine = voskEngine
-            Log.i(TAG, "[STT] Offline Vosk model found for $language. Active STT: VoskSTTEngine.")
+            safeLog(Log.INFO, "[STT] Pure offline Vosk model active for $language.")
         } else {
-            activeEngine = androidEngine
-            androidEngine.initialize(context, language)
-            Log.i(TAG, "[STT] No offline Vosk model for $language; active STT: AndroidSTTEngine.")
+            // Strictly enforce pure offline guarantee: No silent fallback to online recognition!
+            activeEngine = null
+            safeLog(Log.WARN, "[STT] Offline model NOT installed for $language. Install language pack in MODEL CENTER.")
         }
     }
 
     override fun startListening(listener: (String) -> Unit) {
-        activeEngine.startListening(listener)
+        val engine = activeEngine
+        if (engine != null && engine.isInitialized()) {
+            engine.startListening(listener)
+        } else {
+            safeLog(Log.ERROR, "[STT] [ERROR] Cannot start listening: offline language model is not installed.")
+        }
     }
 
     override fun stopListening() {
-        activeEngine.stopListening()
+        activeEngine?.stopListening()
     }
 
     override fun reset() {
-        activeEngine.reset()
+        activeEngine?.reset()
     }
 
-    override fun isInitialized(): Boolean = activeEngine.isInitialized()
+    override fun isInitialized(): Boolean = activeEngine?.isInitialized() == true
 
     override fun shutdown() {
         voskEngine.shutdown()
-        androidEngine.shutdown()
+        sherpaEngine.shutdown()
+        activeEngine = null
     }
 
     fun isUsingVosk(): Boolean = activeEngine === voskEngine
+    fun isUsingSherpa(): Boolean = activeEngine === sherpaEngine
+    fun isOfflineReady(): Boolean = activeEngine != null && activeEngine!!.isInitialized()
 }
 
 class SimulatedSTTEngine : STTEngine {

@@ -42,6 +42,10 @@ android {
         excludes += "/META-INF/{AL2.0,LGPL2.1}"
       }
     }
+
+    testOptions {
+      unitTests.isReturnDefaultValues = true
+    }
 }
 
 kotlin {
@@ -94,6 +98,9 @@ dependencies {
 
   // Vosk for offline STT
   implementation(libs.vosk.android)
+
+  // Sherpa-ONNX for neural IndicConformer offline STT (Tamil, Kannada, etc.)
+  implementation(files("libs/sherpa-onnx.aar"))
 
   // Coroutines
   implementation(libs.kotlinx.coroutines.android)

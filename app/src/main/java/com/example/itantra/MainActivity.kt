@@ -19,11 +19,16 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.itantra.ui.main.MainViewModel
 import com.example.itantra.ui.main.MainScreen
 import com.example.itantra.ui.theme.ITantraTheme
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 import android.content.BroadcastReceiver
 import android.content.Intent
 import android.content.IntentFilter
 import android.util.Log
+import com.example.itantra.speech.stt.LanguagePackManager
 
 class MainActivity : ComponentActivity() {
 
@@ -159,6 +164,93 @@ class MainActivity : ComponentActivity() {
                     vm.clearEventLogs()
                     Log.i("iTantraTest", "EVENTS_CLEARED")
                 }
+                "INSTALL_LANGUAGE" -> {
+                    val langStr = intent.getStringExtra("lang") ?: "ENGLISH"
+                    val lang = try {
+                        com.example.itantra.codec.Language.valueOf(langStr.uppercase())
+                    } catch (_: Exception) {
+                        com.example.itantra.codec.Language.ENGLISH
+                    }
+                    Log.i("iTantraTest", "Starting installation of language pack: $lang")
+                    vm.installLanguagePack(lang)
+                }
+                "GET_LANGUAGE_STATUS" -> {
+                    val statuses = LanguagePackManager.packStatuses.value
+                    Log.i("iTantraTest", "LANGUAGE_PACK_STATUS_COUNT: ${statuses.size}")
+                    statuses.forEach { (lang, status) ->
+                        Log.i("iTantraTest", "LANG_PACK: $lang | state=${status.state} | progress=${status.progress} | msg=${status.statusMessage} | ready=${status.state == LanguagePackManager.InstallState.READY}")
+                    }
+                }
+                "START_RECORDING" -> {
+                    vm.startRecording()
+                    Log.i("iTantraTest", "RECORDING_STARTED")
+                }
+                "STOP_RECORDING" -> {
+                    vm.stopRecording()
+                    Log.i("iTantraTest", "RECORDING_STOPPED")
+                }
+                "SET_LANGUAGE" -> {
+                    val langStr = intent.getStringExtra("lang") ?: "ENGLISH"
+                    val lang = try {
+                        com.example.itantra.codec.Language.valueOf(langStr.uppercase())
+                    } catch (_: Exception) {
+                        com.example.itantra.codec.Language.ENGLISH
+                    }
+                    vm.setLanguage(lang)
+                    Log.i("iTantraTest", "SET_LANGUAGE: $lang")
+                }
+                "TEST_OFFLINE_STT_WAV" -> {
+                    val langStr = intent.getStringExtra("lang") ?: "ENGLISH"
+                    val wavPath = intent.getStringExtra("wav") ?: "/data/local/tmp/test-en.wav"
+                    val lang = try {
+                        com.example.itantra.codec.Language.valueOf(langStr.uppercase())
+                    } catch (_: Exception) {
+                        com.example.itantra.codec.Language.ENGLISH
+                    }
+                    kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                        try {
+                            val modelDir = LanguagePackManager.getModelDirectory(this@MainActivity, lang)
+                            val resolved = LanguagePackManager.resolveVoskRoot(modelDir)
+                            val wavFile = java.io.File(wavPath)
+                            if (!wavFile.exists()) {
+                                Log.e("iTantraTest", "WAV file not found: $wavPath")
+                                return@launch
+                            }
+                            val hasOnnx = java.io.File(resolved, "model.int8.onnx").isFile || java.io.File(resolved, "model.onnx").isFile
+                            val recognized = if (hasOnnx || lang == com.example.itantra.codec.Language.TAMIL || lang == com.example.itantra.codec.Language.KANNADA) {
+                                val sherpa = com.example.itantra.speech.stt.SherpaOnnxSTTEngine()
+                                sherpa.initialize(this@MainActivity, lang)
+                                val text = sherpa.decodeWav(wavFile)
+                                sherpa.shutdown()
+                                text
+                            } else {
+                                val model = org.vosk.Model(resolved.absolutePath)
+                                val rec = org.vosk.Recognizer(model, 16000.0f)
+                                val buffer = ByteArray(4096)
+                                java.io.FileInputStream(wavFile).use { fis ->
+                                    val header = ByteArray(44)
+                                    fis.read(header)
+                                    var read: Int
+                                    while (fis.read(buffer).also { read = it } >= 0) {
+                                        rec.acceptWaveForm(buffer, read)
+                                    }
+                                }
+                                val finalJson = rec.finalResult
+                                rec.close()
+                                model.close()
+                                val textMatch = Regex("\"text\"\\s*:\\s*\"([^\"]*?)\"").find(finalJson)
+                                textMatch?.groupValues?.get(1)?.trim() ?: ""
+                            }
+                            Log.i("iTantraTest", "WAV_STT_RESULT: lang=$lang text=\"$recognized\"")
+                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                vm.setManualText(recognized)
+                                vm.sendManual(recognized)
+                            }
+                        } catch (e: Exception) {
+                            Log.e("iTantraTest", "Error in TEST_OFFLINE_STT_WAV", e)
+                        }
+                    }
+                }
             }
         }
     }
@@ -240,6 +332,10 @@ class MainActivity : ComponentActivity() {
                         if (isFirstRun) {
                             viewModel.toggleOnboardingGuide(true)
                             prefs.edit().putBoolean("is_first_run", false).apply()
+                        }
+
+                        if (!LanguagePackManager.isSetupCompleted.value) {
+                            viewModel.toggleLanguageSetup(true)
                         }
 
                         if (!audioGranted) {

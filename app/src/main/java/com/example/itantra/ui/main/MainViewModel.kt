@@ -15,6 +15,7 @@ import com.example.itantra.ops.LowPowerController
 import com.example.itantra.ops.OperationMode
 import com.example.itantra.ops.OperationModeController
 import com.example.itantra.speech.stt.HybridSTTEngine
+import com.example.itantra.speech.stt.LanguagePackManager
 import com.example.itantra.speech.stt.VoskSTTEngine
 import com.example.itantra.speech.tts.AndroidTTSEngine
 import com.example.itantra.speech.tts.EmbeddedOpenSourceTTS
@@ -88,7 +89,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val modelProbe = ModelManager.ModelProbe { entry ->
         when (entry.kind) {
             ModelManager.ModelKind.STT ->
-                File(app.filesDir, "${entry.id}.zip").isFile ||
+                LanguagePackManager.isModelReady(app, entry.language) ||
+                    File(app.filesDir, "${entry.id}.zip").isFile ||
                     File(app.filesDir, "models/${modelDirCode(entry.language)}").isDirectory
             ModelManager.ModelKind.TTS -> false
         }
@@ -147,6 +149,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _packetActivity = MutableStateFlow<List<PacketActivity>>(emptyList())
     val packetActivity: StateFlow<List<PacketActivity>> = _packetActivity.asStateFlow()
+
+    val languagePackStatuses: StateFlow<Map<Language, LanguagePackManager.LanguagePackStatus>> = LanguagePackManager.packStatuses
+
+    private val _showLanguageSetup = MutableStateFlow(false)
+    val showLanguageSetup: StateFlow<Boolean> = _showLanguageSetup.asStateFlow()
+
+    fun toggleLanguageSetup(show: Boolean) {
+        _showLanguageSetup.value = show
+    }
+
+    fun installLanguagePack(language: Language) {
+        viewModelScope.launch {
+            LanguagePackManager.installLanguagePack(app, language)
+            refreshSystemStatus()
+            if (language == _uiState.value.currentLanguage) {
+                speechPipeline?.setLanguage(language)
+            }
+        }
+    }
+
+    fun completeFirstRunLanguageSetup(secondaryLanguage: Language) {
+        LanguagePackManager.completeFirstRunSetup(app, secondaryLanguage)
+        _showLanguageSetup.value = false
+        refreshSystemStatus()
+    }
 
     data class ReceivedMessageUI(
         val text: String,
@@ -295,6 +322,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     init {
+        LanguagePackManager.refreshStatuses(application)
+        if (!LanguagePackManager.isSetupCompleted.value) {
+            _showLanguageSetup.value = true
+        }
         startObservation()
         refreshSystemStatus()
     }
@@ -309,7 +340,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
     }
 
-    private fun refreshSystemStatus() {
+    fun refreshSystemStatus() {
         val resolutions = ModelManager.resolve(modelProbe)
         _modelStatus.value = resolutions
         _uiState.update {
@@ -471,9 +502,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             speechPipeline?.pipelineState?.collect { ps ->
                 _uiState.update { current ->
                     val report = ps.lastSendReport
+                    val isModelReady = LanguagePackManager.isModelReady(app, current.currentLanguage)
+                    val sttLabel = when {
+                        ps.isProcessing -> "PROCESSING AUDIO (VOSK)..."
+                        isModelReady -> "OFFLINE READY (VOSK 16kHz)"
+                        else -> "OFFLINE MODEL NOT INSTALLED"
+                    }
                     val diag = current.voiceDiagnostics.copy(
                         micStatus = if (ps.isRecording) "RECORDING (MIC ACTIVE)" else "IDLE",
-                        sttStatus = if (ps.isProcessing) "PROCESSING AUDIO..." else "READY (${sttEngine.javaClass.simpleName})",
+                        sttStatus = sttLabel,
                         selectedLanguage = current.currentLanguage.name,
                         recognizedText = ps.lastSentText.ifBlank { current.voiceDiagnostics.recognizedText },
                         inputDurationMs = if (ps.inputDurationMs > 0) ps.inputDurationMs else current.voiceDiagnostics.inputDurationMs,
@@ -960,12 +997,18 @@ private suspend fun observeLinkMetrics(engine: TransportEngine) {
             android.Manifest.permission.RECORD_AUDIO
         ) == android.content.pm.PackageManager.PERMISSION_GRANTED
         if (!hasMicPermission) {
-            _uiState.update { it.copy(linkError = "RECORD_AUDIO PERMISSION REQUIRED â€” grant in phone settings") }
+            _uiState.update { it.copy(linkError = "RECORD_AUDIO PERMISSION REQUIRED — grant in phone settings") }
+            return
+        }
+        val currentLang = _uiState.value.currentLanguage
+        if (!LanguagePackManager.isModelReady(app, currentLang)) {
+            _uiState.update { it.copy(linkError = "OFFLINE MODEL NOT INSTALLED FOR ${currentLang.displayName.uppercase()} — INSTALL IN MODEL CENTER") }
+            _showLanguageSetup.value = true
             return
         }
         val started = speechPipeline?.startListening() ?: false
         if (!started) {
-            _uiState.update { it.copy(linkError = "STT NOT READY OR INITIALIZATION FAILED") }
+            _uiState.update { it.copy(linkError = "OFFLINE STT NOT READY OR INITIALIZATION FAILED") }
         }
     }
 

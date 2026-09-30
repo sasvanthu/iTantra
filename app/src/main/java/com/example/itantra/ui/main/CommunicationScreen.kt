@@ -35,6 +35,9 @@ import com.example.itantra.transport.TransportType
 import com.example.itantra.ui.components.SecurityPanel
 import com.example.itantra.ui.components.TransmissionDebugPanel
 import com.example.itantra.ui.components.LiveEventLogPanel
+import com.example.itantra.ui.components.LanguageSetupDialog
+import com.example.itantra.speech.stt.LanguagePackManager
+import androidx.compose.ui.platform.LocalContext
 import com.example.itantra.ui.map.CampusCommunicationMap
 import com.example.itantra.ui.theme.*
 
@@ -54,6 +57,14 @@ fun CommunicationScreen(viewModel: MainViewModel) {
 
         if (uiState.showOnboardingGuide) {
             FirstLaunchGuideModal(onDismiss = { viewModel.toggleOnboardingGuide(false) })
+        }
+
+        val showLanguageSetup by viewModel.showLanguageSetup.collectAsState()
+        if (showLanguageSetup) {
+            LanguageSetupDialog(
+                viewModel = viewModel,
+                onDismiss = { viewModel.toggleLanguageSetup(false) }
+            )
         }
 
         if (!uiState.audioPermissionGranted || !uiState.blePermissionGranted) {
@@ -112,6 +123,7 @@ fun CommunicationScreen(viewModel: MainViewModel) {
             diag = uiState.voiceDiagnostics,
             selectedLang = uiState.currentLanguage,
             onSelectLang = { viewModel.setLanguage(it) },
+            onOpenSetup = { viewModel.toggleLanguageSetup(true) },
             onRunTest = { text, lang -> viewModel.runSingleDeviceVoiceTest(text, lang) }
         )
 
@@ -127,6 +139,62 @@ fun CommunicationScreen(viewModel: MainViewModel) {
                 onStartRecording = { viewModel.startRecording() },
                 onStopRecording = { viewModel.stopRecording() }
             )
+        }
+
+        if (uiState.isRecording) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = "● LISTENING... SPEAK INTO MICROPHONE (VOSK 16kHz PCM)",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = RetroGreen
+                )
+            }
+        }
+
+        if (uiState.lastSentText.isNotBlank()) {
+            Spacer(modifier = Modifier.height(10.dp))
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, RetroGreen, RoundedCornerShape(8.dp)),
+                colors = CardDefaults.cardColors(containerColor = RetroSurface)
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "LIVE SPEECH TRANSCRIPT [${uiState.currentLanguage.name} · OFFLINE]:",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp,
+                            color = RetroCyan,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "OFFLINE MODEL",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 9.sp,
+                            color = RetroGreen,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "> \"${uiState.lastSentText}\"",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = RetroGreen
+                    )
+                }
+            }
         }
 
         Spacer(modifier = Modifier.height(12.dp))
@@ -1065,12 +1133,16 @@ fun SingleDeviceVoiceDiagnosticsCard(
     diag: MainViewModel.SingleDeviceVoiceDiagnostics,
     selectedLang: com.example.itantra.codec.Language,
     onSelectLang: (com.example.itantra.codec.Language) -> Unit,
+    onOpenSetup: () -> Unit = {},
     onRunTest: (String, com.example.itantra.codec.Language) -> Unit
 ) {
+    val context = LocalContext.current
+    val isModelInstalled = LanguagePackManager.isModelReady(context, selectedLang)
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .border(1.dp, RetroAmber.copy(alpha = 0.5f), RoundedCornerShape(12.dp)),
+            .border(1.dp, if (isModelInstalled) RetroAmber.copy(alpha = 0.5f) else RetroOrange, RoundedCornerShape(12.dp)),
         colors = CardDefaults.cardColors(containerColor = RetroSurface),
         shape = RoundedCornerShape(12.dp)
     ) {
@@ -1089,18 +1161,41 @@ fun SingleDeviceVoiceDiagnosticsCard(
                     letterSpacing = 1.sp
                 )
                 Text(
-                    text = "[SINGLE DEVICE]",
+                    text = if (isModelInstalled) "[OFFLINE READY]" else "[MODEL MISSING]",
                     fontFamily = FontFamily.Monospace,
                     fontSize = 10.sp,
-                    color = RetroCyan
+                    fontWeight = FontWeight.Bold,
+                    color = if (isModelInstalled) RetroGreen else RetroOrange
                 )
+            }
+
+            if (!isModelInstalled) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(RetroOrange.copy(alpha = 0.15f))
+                        .border(1.dp, RetroOrange, RoundedCornerShape(6.dp))
+                        .clickable { onOpenSetup() }
+                        .padding(8.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "⚠ OFFLINE MODEL NOT INSTALLED — TAP TO INSTALL PACK",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = RetroOrange
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(10.dp))
 
             // The 10 required diagnostic metrics
             StatusRow("MIC STATUS:", diag.micStatus, if (diag.micStatus.contains("RECORDING") || diag.micStatus.contains("ACTIVE")) RetroAmber else RetroGreen)
-            StatusRow("STT STATUS:", diag.sttStatus, RetroCyan)
+            StatusRow("STT STATUS:", if (isModelInstalled) "OFFLINE READY (VOSK 16kHz)" else "OFFLINE MODEL NOT INSTALLED", if (isModelInstalled) RetroGreen else RetroOrange)
             StatusRow("SELECTED LANGUAGE:", diag.selectedLanguage, RetroAmber)
             StatusRow("RECOGNIZED TEXT:", diag.recognizedText, RetroGreen)
             StatusRow("INPUT DURATION:", if (diag.inputDurationMs > 0) "${diag.inputDurationMs} ms [MEASURED]" else "—", RetroCyan)
@@ -1127,26 +1222,29 @@ fun SingleDeviceVoiceDiagnosticsCard(
             ) {
                 listOf(
                     com.example.itantra.codec.Language.ENGLISH to "EN",
-                    com.example.itantra.codec.Language.HINDI to "HI (हिंदी)",
-                    com.example.itantra.codec.Language.TAMIL to "TA (தமிழ்)"
+                    com.example.itantra.codec.Language.HINDI to "HI",
+                    com.example.itantra.codec.Language.TELUGU to "TE",
+                    com.example.itantra.codec.Language.GUJARATI to "GU",
+                    com.example.itantra.codec.Language.TAMIL to "TA"
                 ).forEach { (lang, label) ->
                     val active = selectedLang == lang
+                    val ready = LanguagePackManager.isModelReady(context, lang)
                     Box(
                         modifier = Modifier
                             .weight(1f)
                             .clip(RoundedCornerShape(6.dp))
                             .background(if (active) RetroAmber else RetroBackground)
-                            .border(1.dp, if (active) RetroAmber else RetroDarkGray, RoundedCornerShape(6.dp))
+                            .border(1.dp, if (active) RetroAmber else if (ready) RetroGreen.copy(alpha = 0.5f) else RetroDarkGray, RoundedCornerShape(6.dp))
                             .clickable { onSelectLang(lang) }
                             .padding(vertical = 6.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = label,
+                            text = label + if (ready) "✓" else "",
                             fontFamily = FontFamily.Monospace,
                             fontSize = 10.sp,
                             fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
-                            color = if (active) RetroBackground else RetroWhite
+                            color = if (active) RetroBackground else if (ready) RetroGreen else RetroWhite
                         )
                     }
                 }
